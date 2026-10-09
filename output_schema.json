@@ -1,0 +1,14 @@
+{
+  "round": 1,
+  "agent_id": "MEDICAL_OFFICER",
+  "proposal": {
+    "oxygen_units": 25,
+    "water_liters": 80,
+    "power_kwh": 40,
+    "food_rations": 12,
+    "justification": "Medical bay requires stable oxygen for 3 critical patients. Requesting minimum viable allocation."
+  },
+  "vote": "APPROVE",
+  "risk_score": 14,
+  "flag_human_review": false
+}
