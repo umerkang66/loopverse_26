@@ -10,7 +10,7 @@
 
 | Phase | Scope | Ends with |
 |---|---|---|
-| **1 (this file)** | Deterministic engine (validator, optimizer, ledger), five real agents on the OpenAI Agents SDK, the negotiation protocol (baseline **and** post-event), persistence, API + SSE, minimal debug console, tests | A complete negotiation runs end-to-end through the API (live LLM and offline), tested |
+| **1 (this file)** | Deterministic engine (validator, optimizer, ledger), five real agents on the OpenAI Agents SDK, the negotiation protocol (baseline **and** post-event), **Supabase Postgres persistence** (with a local-snapshot fallback), API + SSE, minimal debug console, tests | A complete negotiation runs end-to-end through the API (live LLM and offline), tested, and every message, plan, vote, and commitment lands in Supabase |
 | 2 (`phase2.md`) | The judge-facing **Mission Control dashboard** (every required view + extras) | Judges can run and understand everything from the UI |
 | 3 (`phase3.md`) | Unseen-event intake (LLM interpreter), robustness and fault injection, human-in-the-loop, evidence pack, docs, deployment, demo video | A submission-ready, hackathon-winning project |
 
@@ -18,7 +18,7 @@ Rules for the implementing agent:
 
 1. Work through milestones **1A → 1I** in order. Each milestone ends with a **checkpoint**; don't move on while a checkpoint fails.
 2. The challenge PDF (`ARES_ACCORD_24_HOUR_VIRTUAL_CHALLENGE_LOOPVERSE_3.0.pdf`, repo root) is the authority. This document turns it into an implementation spec. If you find a conflict, follow the PDF and leave a `// NOTE(pdf):` comment.
-3. **Secrets:** `application/.env` already holds `OPENAI_API_KEY`. Never print it, log it, copy it into tracked files, or move it. Only `.env.example` (names only) gets committed.
+3. **Secrets:** `application/.env` already holds `OPENAI_API_KEY` and the Supabase settings (`SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_JWKS_URL`, `DB_PASSWORD`). Never print, log, or copy any value, and never move the file. Only `.env.example` (names only) gets committed. **`SUPABASE_SECRET_KEY` and `DB_PASSWORD` are server/CLI-only. Nothing secret may ever be referenced from client code or put behind a `NEXT_PUBLIC_` name.**
 4. **No hardcoded negotiation.** Agent messages come from LLM calls or, on failure, from a **rule-based fallback policy** that computes its output from live state and is **labeled `FALLBACK`** everywhere. Never ship a scripted transcript, a pre-generated log, or a preloaded final allocation. The rules say this can get a team disqualified.
 5. Keep modules small and pure where possible. Everything in `src/domain` and `src/engine` must be **framework-free and side-effect-free**, so the client can import it too (Phase 2 uses it for previews).
 6. Time budget: about **8–10 hours** (PDF hours 00–12: architecture, roles, negotiation loop, validator).
@@ -119,6 +119,7 @@ Judges evaluate **through the dashboard**, not the source. They are checking:
 4. **Adaptation to an unseen event** within 3 minutes. If nothing fits, an exhaustive-search **infeasibility certificate** says what extra resource or policy change is needed.
 5. **Reliability.** Timeouts, invalid model output, round limits, network outage → labeled rule-based fallback; the demo never dies.
 6. **Compliance at a glance.** A live checklist computed from real run data (≥ 3 rounds, a refused Sacrifice, 2 returns, …) with links to the evidence messages. This is our signature feature, because it lets judges confirm the PDF's requirements in seconds.
+7. **A real database, not a log file.** Every scenario, message, plan version, validation report, vote, commitment, and each agent's private memory is persisted to **Supabase Postgres** in normalized, queryable tables. The PDF's "complete, persistent conversation history across all scenarios" survives restarts and redeploys, and can be searched across sessions (Phase 3).
 
 ---
 
@@ -136,6 +137,10 @@ Judges evaluate **through the dashboard**, not the source. They are checking:
 | `vitest` | ^5 | Tests (`environment: 'node'`) |
 | `tsx` | ^4.23 | CLI scripts |
 | `fflate` | ^0.8 | Zip export (Phase 3) |
+| `@supabase/supabase-js` | **2.117.3** (pin exactly; commit the lockfile) | Server-side Data API client using the **secret key** (role `service_role`). Requires Node ≥ 22 |
+| `supabase` (CLI, devDependency) | **2.120.0** (pin) | `init`, `migration new`, `link`, `db push`, `db advisors`, `gen types`. Flags verified with `--help` |
+| `uuid` | ^14 | Time-ordered **UUIDv7** session ids, generated in the app with no DB round trip |
+| Supabase Postgres | 17 (managed) | Tables `public.ares_*`. **Breaking change (2026-04-28, enforced on all projects from 2026-10-30): new tables are NOT exposed to the Data API automatically**, so the migration must `GRANT` privileges to `service_role` explicitly (§7.2.2) |
 
 **OpenAI models (verified from OpenAI's model docs and the SDK's default-model table):**
 
@@ -175,7 +180,9 @@ Model IDs change quickly. `/api/health` must verify the configured models at run
 │   │+Session│ │+Session│ │+Session│ │+Session│ │+Session│     list_feasible_plans, …)       │
 │   └────┬───┘ └───┬────┘ └───┬────┘ └───┬────┘ └───┬────┘                                   │
 │        └─────────┴──── OpenAI Responses API (Agents SDK, tracing) ───────┘                 │
-│  File store: data/sessions/<id>.json (atomic writes) — persistent history of all scenarios│
+│  Persistence: SessionState ──markDirty──► write-behind sync ──upsert──► Supabase Postgres │
+│               (system of record: ares_* tables)   + local snapshot data/*.json (fallback, │
+│               crash recovery; the only store when Supabase isn't configured)              │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -184,7 +191,7 @@ Model IDs change quickly. `/api/health` must verify the configured models at run
 1. **Deterministic core, LLM periphery.** LLMs decide *what to say and which modes/commitments to propose*. Pure code decides *what is valid, what the numbers are, what version a plan is, whether votes count, and whether approval may happen*.
 2. **Real separation.** Each agent is its own `Agent` instance with its own instructions, its own `MemorySession` (private message history), its own state (stance, memory notes, ledger, trust), and its own inbox. Agents never see each other's private notes or sessions. The only shared medium is the **council message bus**.
 3. **Protocol as a state machine.** Each round has seven phases that mirror the PDF's seven steps (§9). Minimum rounds, maximum rounds, and deadlines are protocol rules, not scripts.
-4. **One source of truth.** A single `SessionState` object lives in the runtime singleton and is mutated only through `mutations.ts`. Every mutation emits bus events and schedules a persisted write.
+4. **One source of truth at runtime, one durable system of record.** A single in-memory `SessionState` lives in the runtime singleton and is mutated only through `mutations.ts`. Every mutation emits bus events and marks the touched rows dirty. A write-behind sync upserts them into **Supabase** within about 200 ms, and a debounced local snapshot covers crashes and database outages. **The negotiation never awaits a database write**, so Supabase latency or an outage can't break the 3-minute guarantee.
 5. **Fail-safe by default.** Every LLM call has a timeout, a repair retry, and a labeled rule-based fallback. Offline mode (no API key) runs the whole system on fallback policies.
 
 ---
@@ -216,9 +223,12 @@ Then install:
 ```bash
 cd application
 npm install
-npm install @openai/agents@0.20.0 openai zod@^4 server-only fflate
+npm install --save-exact @openai/agents@0.20.0 @supabase/supabase-js@2.117.3
+npm install openai zod@^4 server-only fflate uuid
 npm install -D vitest vite-tsconfig-paths tsx @types/node
+npm install -D --save-exact supabase@2.120.0
 ```
+Commit `package-lock.json`. Supabase's supply-chain guidance is to pin Supabase packages and commit the lockfile.
 
 **Config changes:**
 
@@ -249,6 +259,24 @@ npm install -D vitest vite-tsconfig-paths tsx @types/node
    HITL_RISK_THRESHOLD=20
    DATA_DIR=./data
    JUDGE_ACCESS_CODE=
+
+   # ── Database: Supabase (optional). Without SUPABASE_URL + SUPABASE_SECRET_KEY the app uses the local file store. ──
+   SUPABASE_URL=
+   # Server-only secret key (sb_secret_…) → Postgres role service_role. NEVER expose it via a NEXT_PUBLIC_ variable.
+   SUPABASE_SECRET_KEY=
+   # Not used by this app's server or browser code (no client-side DB access, no Supabase Auth); kept for completeness.
+   SUPABASE_PUBLISHABLE_KEY=
+   NEXT_PUBLIC_SUPABASE_URL=
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+   SUPABASE_JWKS_URL=
+   # Postgres password. Used ONLY by `npm run db:push` (Supabase CLI), never by the running app.
+   DB_PASSWORD=
+   # auto | supabase | file   (auto = supabase when SUPABASE_URL and SUPABASE_SECRET_KEY are set)
+   STORAGE_DRIVER=auto
+   # Namespaces sessions per deployment so a laptop and a hosted demo never write over each other.
+   ARES_INSTANCE_ID=local
+   DB_FLUSH_MS=200
+   DB_TIMEOUT_MS=8000
    ```
 3. `next.config.ts`:
    ```ts
@@ -285,25 +313,35 @@ npm install -D vitest vite-tsconfig-paths tsx @types/node
      "test:watch": "vitest",
      "simulate": "tsx --env-file-if-exists=.env scripts/simulate.ts",
      "reset:data": "node scripts/reset-data.mjs",
+     "db:push": "node scripts/db.mjs push",
+     "db:check": "node scripts/db.mjs check",
+     "db:advisors": "node scripts/db.mjs advisors",
+     "db:types": "node scripts/db.mjs types",
+     "test:db": "vitest run --config vitest.db.config.ts",
      "check": "npm run typecheck && npm run lint && npm run test"
    }
    ```
    (`--env-file-if-exists` is a Node ≥ 22.9 flag that tsx passes through. It doesn't fail when `.env` is missing.)
+   `vitest.db.config.ts` is a copy of `vitest.config.ts` with `include: ['tests/**/*.it.ts']`, `setupFiles: ['tests/setup-env.ts']`, and `testTimeout: 120_000`. `tests/setup-env.ts` does `try { process.loadEnvFile('.env'); } catch {}`. Database integration tests live in `*.it.ts` files, so the regular `npm test` never touches the network or your Supabase project.
 6. `tsconfig.json`: keep `strict: true`, and add `"noUncheckedIndexedAccess": true` (it catches real bugs in resource math).
 
 **Folder layout to create (empty files are fine at this point):**
 
 ```
 application/
-  scripts/            simulate.ts · reset-data.mjs
-  tests/              stubs/server-only.ts · integration/*.test.ts
+  supabase/           config.toml (from `supabase init`) · migrations/<timestamp>_ares_init.sql (from `supabase migration new`)
+  scripts/            simulate.ts · reset-data.mjs · db.mjs
+  tests/              stubs/server-only.ts · setup-env.ts · integration/*.test.ts · integration/supabase.it.ts
+  vitest.db.config.ts
   src/
     app/              page.tsx (placeholder) · dev/page.tsx · api/**/route.ts
     domain/           types.ts · constants.ts · scenario/ares-accord.json · scenario/index.ts · schemas.ts
     engine/           resources.ts · catalog.ts · policy.ts · validator.ts · optimizer.ts · infeasibility.ts
                       plans.ts · commitments.ts · votes.ts · events.ts · compliance.ts · format.ts · *.test.ts
     server/           env.ts · logger.ts · runtime.ts · bus.ts · ids.ts · hash.ts
-      store/          file-store.ts · types.ts
+      store/          types.ts · local-snapshot.ts · persistence.ts (facade: local snapshot + optional Supabase sync)
+      db/             supabase.ts (admin client) · rows.ts (row types / zod) · mappers.ts (SessionState ⇄ rows)
+                      sync.ts (write-behind) · load.ts (boot + archive reads) · errors.ts · database.types.ts (optional, generated)
       agents/         profiles.ts · sdk.ts · schemas.ts · packet.ts · tools.ts · guardrails.ts · factory.ts
                       sessions.ts · gateway.ts · errors.ts · prompts/{commander,department,shared}.ts
                       fallback/{commander,department}.ts
@@ -311,7 +349,7 @@ application/
       export/         json.ts · csv.ts · output-schema.ts
 ```
 
-✅ **Checkpoint 1A:** `npm run dev` serves the template page. `npm run typecheck` and `npm run test` run, with zero tests passing for now. `git status` does not show `.env`.
+✅ **Checkpoint 1A:** `npm run dev` serves the template page. `npm run typecheck` and `npm run test` run, with zero tests passing for now. `npx supabase --version` prints `2.120.0`. `git status` does not show `.env`.
 
 ---
 
@@ -520,7 +558,9 @@ export interface SessionConfig {
   hitl: { enabled: boolean; riskThreshold: number };
 }
 export interface SessionState {
-  id: string; createdAt: string; updatedAt: string; config: SessionConfig;
+  id: string;                    // UUIDv7 generated by the app (uuid v7()), also the Supabase primary key
+  instanceId: string;            // ARES_INSTANCE_ID, namespacing sessions per deployment
+  createdAt: string; updatedAt: string; config: SessionConfig;
   scenarioConfigId: string; catalogHash: string;
   scenarios: Scenario[]; events: EventRecord[]; plans: Plan[]; commitments: Commitment[];
   messages: CouncilMessage[]; agents: Record<AgentId, AgentState>; run: RunState;
@@ -780,6 +820,7 @@ interface ComplianceItem { id: string; label: string; scope: 'BASELINE' | 'EVENT
 | `MIN_2_ROUNDS_OR_PROOF` | ≥ 2 visible rounds unless infeasibility proven | Event scenario approval round ≥ 2, or INFEASIBLE with certificate |
 | `FRESH_VOTES` | New approval needs four votes on the new version | Votes on the new version |
 | `WITHIN_3_MIN` | Resolution within 3 minutes of the event | `resolvedAt − startedAt ≤ 180 s` |
+| `PERSISTED` | Complete, persistent history of all scenarios (PDF §05) | **Added by the runtime, not the pure engine.** PASS when storage is `supabase`, the sync is `SYNCED` with 0 pending rows, and the DB message count for this session equals the in-memory count (cached head-count query, §7.2.4). `NA` with detail *"local file store"* when Supabase isn't configured |
 
 ### 6.10 Message payloads (`data` field)
 
@@ -837,16 +878,336 @@ Mapping: `LIFE_SUPPORT→LIFE_SUPPORT_OFFICER`, `MEDICAL→MEDICAL_OFFICER`, `FO
 
 ---
 
-## 7. Milestone 1D — State, persistence, bus, runtime (`src/server/*`)
+## 7. Milestone 1D — State, persistence (Supabase + local snapshot), bus, runtime (`src/server/*`)
 
 ### 7.1 `env.ts`
-Parse `process.env` with zod and apply the defaults from `.env.example`. `mode = AGENT_MODE || (OPENAI_API_KEY ? 'live' : 'offline')`. Export `getServerEnv()`. **Never** include the key in any object that reaches the client or the logs.
+Parse `process.env` with zod and apply the defaults from `.env.example`. `mode = AGENT_MODE || (OPENAI_API_KEY ? 'live' : 'offline')`. `storageDriver = STORAGE_DRIVER === 'auto' ? (SUPABASE_URL && SUPABASE_SECRET_KEY ? 'supabase' : 'file') : STORAGE_DRIVER`. Export `getServerEnv()`. **Never** include a key or password in any object that reaches the client or the logs.
 
-### 7.2 `store/file-store.ts`
-- `DATA_DIR` (default `./data`): `data/index.json` = `{ currentSessionId, sessions: [{ id, createdAt, updatedAt, summary }] }` and `data/sessions/<id>.json` = full `SessionState`.
-- `load()`, `save(state)` debounced 150 ms, `flush()`, `archiveAndCreate()`, `list()`, `get(id)`.
+**Fail-fast secret guard (at boot):** if any `NEXT_PUBLIC_*` value starts with `sb_secret_`, equals `SUPABASE_SECRET_KEY`, or equals `DB_PASSWORD`, throw a fatal configuration error: *"A secret is exposed through a NEXT_PUBLIC_ variable."* Next.js inlines `NEXT_PUBLIC_*` values into browser bundles. The publishable key and URL are safe to expose, but this app doesn't use them client-side at all, by design: **the browser never talks to Supabase directly**. All database access goes through the server.
+
+### 7.2 Persistence: Supabase Postgres (system of record) + local snapshot (safety net)
+
+**Why this shape:** the runtime keeps the hot state in memory, so the negotiation has zero database latency. Supabase is the durable, queryable **system of record**. A local snapshot file covers two cases: a crash while the database was unreachable, and running without Supabase at all. Judges cloning the repo won't have your credentials, so `STORAGE_DRIVER=file` must give the full experience.
+
+```
+mutations.ts ──markDirty(table, key)──► SupabaseSync (write-behind, ≈200 ms batches, FK-ordered upserts, retries)
+     │                                         └──► Supabase Postgres: public.ares_* (role service_role via the secret key)
+     └──scheduleSnapshot()──► LocalSnapshot (debounced 1 s, atomic file write: data/<instance>/current.json)
+```
+
+#### 7.2.1 Local snapshot (`store/local-snapshot.ts`), always on
+- `DATA_DIR/<instanceId>/current.json` holds the full `SessionState`. It's written debounced (1 s) and on `flush()`.
 - **Atomic write:** write `<file>.tmp`, then `fs.rename`. On Windows, retry `EPERM`/`EBUSY`/`EACCES` up to 6 times with 25 ms × attempt backoff. Keep the last good copy as `<file>.bak`.
-- On boot, if the loaded session has `run.status === 'RUNNING'`, set it to `INTERRUPTED` and post `SYSTEM` *"Server restarted during round N; negotiation interrupted. Use Resume."* This is the crash-recovery story.
+- **File mode only:** it also keeps the archive: `DATA_DIR/<instanceId>/sessions/<id>.json` + `index.json` (`list()`, `get(id)`, `archiveAndCreate()`). In Supabase mode, the archive lives in the database.
+
+#### 7.2.2 Schema and migration (Supabase)
+
+Create the migration with the CLI. Never invent the filename:
+
+```bash
+cd application
+npx supabase init                       # creates supabase/config.toml (commit it)
+npx supabase migration new ares_init    # creates supabase/migrations/<timestamp>_ares_init.sql → paste the SQL below
+```
+
+```sql
+-- ARES ACCORD · initial schema (Supabase Postgres 17)
+-- Access model: ONLY the app server touches these tables, using the secret key (role service_role, BYPASSRLS).
+-- anon/authenticated receive NO grants, so the tables are unreachable with the publishable key.
+-- RLS is enabled everywhere as defense in depth (no policies = deny for every non-bypass role).
+
+create table public.ares_sessions (
+  id                    uuid primary key,                    -- app-generated UUIDv7 (time-ordered, no index fragmentation)
+  instance_id           text not null,                       -- ARES_INSTANCE_ID (local, hosted, sim-…, it-…)
+  scenario_config_id    text not null,
+  catalog_hash          text not null,
+  mode                  text not null check (mode in ('live','offline')),
+  status                text not null default 'active' check (status in ('active','archived')),
+  config                jsonb not null,
+  run                   jsonb not null,                      -- RunState
+  counters              jsonb not null,
+  plan_in_force_version integer,
+  summary               jsonb not null default '{}'::jsonb,  -- per-scenario outcomes + counts, for the archive list
+  created_at            timestamptz not null,
+  updated_at            timestamptz not null
+);
+create index ares_sessions_instance_created_idx on public.ares_sessions (instance_id, created_at desc);
+
+create table public.ares_instances (
+  instance_id        text primary key,
+  current_session_id uuid references public.ares_sessions (id) on delete set null,
+  lease_owner        text,                                   -- "<hostname>:<pid>:<bootId>" of the runtime writing this instance
+  lease_expires_at   timestamptz,
+  updated_at         timestamptz not null
+);
+create index ares_instances_current_session_idx on public.ares_instances (current_session_id);
+
+create table public.ares_scenarios (
+  session_id            uuid not null references public.ares_sessions (id) on delete cascade,
+  scenario_id           text not null,                       -- 'S0', 'S1', …
+  idx                   integer not null,
+  kind                  text not null check (kind in ('BASELINE','EVENT')),
+  title                 text not null,
+  status                text not null check (status in ('PENDING','NEGOTIATING','AWAITING_COUNTERSIGN','RESOLVED')),
+  outcome               text check (outcome in ('APPROVED','INFEASIBLE','DEADLOCK','TIMEOUT','INTERRUPTED')),
+  approved_plan_version integer,
+  started_at            timestamptz,
+  resolved_at           timestamptz,
+  data                  jsonb not null,                      -- the full Scenario object
+  updated_at            timestamptz not null,
+  primary key (session_id, scenario_id)
+);
+
+create table public.ares_events (
+  session_id     uuid not null references public.ares_sessions (id) on delete cascade,
+  event_id       text not null,                              -- 'EV-1'
+  scenario_id    text not null,
+  title          text not null,
+  source         text not null check (source in ('DETERMINISTIC','LLM','HYBRID','MANUAL','PRESET')),
+  received_at    timestamptz not null,
+  pool_before    jsonb not null,
+  pool_after     jsonb not null,
+  interpretation jsonb not null,
+  primary key (session_id, event_id)
+);
+
+create table public.ares_plans (
+  session_id        uuid not null references public.ares_sessions (id) on delete cascade,
+  version           integer not null,
+  scenario_id       text not null,
+  round             integer not null,
+  hash              text not null,
+  label             text not null,
+  status            text not null check (status in ('DRAFT','FAILED','READY','VOTING','REJECTED','APPROVED','RATIFIED','SUPERSEDED','STALE','INVALID')),
+  life_support_mode text not null check (life_support_mode in ('L1','L2','L3')),
+  medical_mode      text not null check (medical_mode in ('M1','M2','M3')),
+  food_mode         text not null check (food_mode in ('F1','F2','F3')),
+  engineering_mode  text not null check (engineering_mode in ('E1','E2','E3')),
+  risk              integer not null,
+  sacrifices        text[] not null,
+  commitment_ids    text[] not null,
+  totals            jsonb not null,
+  reserve           jsonb not null,
+  policy            jsonb not null,
+  pool_snapshot     jsonb not null,
+  diff              jsonb,
+  rationale         text not null,
+  status_reason     text,
+  created_at        timestamptz not null,
+  updated_at        timestamptz not null,
+  primary key (session_id, version)
+);
+create index ares_plans_scenario_idx on public.ares_plans (session_id, scenario_id);
+
+create table public.ares_plan_validations (
+  session_id   uuid not null references public.ares_sessions (id) on delete cascade,
+  plan_version integer not null,
+  report_no    integer not null,                             -- position in Plan.validations
+  stage        text not null check (stage in ('DRY_RUN','PRE_VOTE','APPROVAL')),
+  status       text not null check (status in ('PASS','FAIL')),
+  plan_hash    text,
+  checks       jsonb not null,
+  warnings     jsonb not null,
+  evaluated_at timestamptz not null,
+  primary key (session_id, plan_version, report_no)
+);
+
+create table public.ares_votes (
+  session_id   uuid not null references public.ares_sessions (id) on delete cascade,
+  vote_id      text not null,                                -- 'V-12'
+  plan_version integer not null,
+  plan_hash    text not null,
+  agent_id     text not null check (agent_id in ('LIFE_SUPPORT','MEDICAL','FOOD','ENGINEERING')),
+  decision     text not null check (decision in ('ACCEPT','REJECT')),
+  reason       text not null,
+  conditions   jsonb not null default '[]'::jsonb,
+  round        integer not null,
+  source       text not null check (source in ('LLM','FALLBACK','DETERMINISTIC','HUMAN')),
+  created_at   timestamptz not null,
+  primary key (session_id, vote_id)
+);
+create index ares_votes_plan_idx on public.ares_votes (session_id, plan_version);
+
+create table public.ares_commitments (
+  session_id    uuid not null references public.ares_sessions (id) on delete cascade,
+  commitment_id text not null,                               -- 'C-3'
+  scenario_id   text not null,
+  owner         text not null,
+  beneficiary   text not null,
+  kind          text not null check (kind in ('RESOURCE_SHARE','RESERVE_ASSIGNMENT','PRIORITY','FUTURE_RESOURCE','OTHER')),
+  resource      text,
+  amount        integer,
+  promise       text not null,
+  status        text not null check (status in ('OFFERED','ACCEPTED','DECLINED','WITHDRAWN','ACTIVE','DUE','FULFILLED','BREACHED','VOID','EXPIRED')),
+  data          jsonb not null,                              -- the full Commitment (expiry, history, …)
+  updated_at    timestamptz not null,
+  primary key (session_id, commitment_id),
+  constraint ares_commitments_owner_not_beneficiary check (owner <> beneficiary)
+);
+
+create table public.ares_messages (
+  session_id   uuid not null references public.ares_sessions (id) on delete cascade,
+  seq          integer not null,
+  message_id   text not null,                                -- 'M-0042'
+  scenario_id  text not null,
+  round        integer not null,
+  phase        text not null,
+  from_actor   text not null,
+  to_actors    text[] not null,                              -- {ALL} or agent ids
+  type         text not null check (type in ('BRIEFING','PROPOSAL','OBJECTION','COUNTEROFFER','COMMITMENT','PLAN_DRAFT','VALIDATION','VOTE','APPROVAL','DECISION','EVENT','SYSTEM')),
+  subtype      text,
+  summary      text not null,
+  body         text not null,
+  plan_version integer,
+  turn_id      text,
+  source       text not null check (source in ('LLM','FALLBACK','DETERMINISTIC','HUMAN')),
+  model        text,
+  latency_ms   integer,
+  trace_id     text,
+  data         jsonb not null,
+  meta         jsonb,
+  created_at   timestamptz not null,
+  search       tsvector generated always as (to_tsvector('english', summary || ' ' || body)) stored,
+  primary key (session_id, seq)
+);
+create index ares_messages_scenario_idx on public.ares_messages (session_id, scenario_id, seq);
+create index ares_messages_search_idx on public.ares_messages using gin (search);
+
+create table public.ares_agent_states (
+  session_id uuid not null references public.ares_sessions (id) on delete cascade,
+  agent_id   text not null check (agent_id in ('COMMANDER','LIFE_SUPPORT','MEDICAL','FOOD','ENGINEERING')),
+  state      jsonb not null,                                 -- AgentState minus sessionItems
+  updated_at timestamptz not null,
+  primary key (session_id, agent_id)
+);
+
+-- Each agent's PRIVATE Agents-SDK session history (its own message history), one row per item.
+create table public.ares_agent_memory (
+  session_id uuid not null references public.ares_sessions (id) on delete cascade,
+  agent_id   text not null check (agent_id in ('COMMANDER','LIFE_SUPPORT','MEDICAL','FOOD','ENGINEERING')),
+  item_no    integer not null,
+  item       jsonb not null,                                 -- AgentInputItem
+  created_at timestamptz not null,
+  primary key (session_id, agent_id, item_no)
+);
+
+-- RLS on every table (defense in depth). service_role bypasses RLS; anon/authenticated hold no grants at all.
+alter table public.ares_sessions         enable row level security;
+alter table public.ares_instances        enable row level security;
+alter table public.ares_scenarios        enable row level security;
+alter table public.ares_events           enable row level security;
+alter table public.ares_plans            enable row level security;
+alter table public.ares_plan_validations enable row level security;
+alter table public.ares_votes            enable row level security;
+alter table public.ares_commitments      enable row level security;
+alter table public.ares_messages         enable row level security;
+alter table public.ares_agent_states     enable row level security;
+alter table public.ares_agent_memory     enable row level security;
+
+-- Data API exposure. REQUIRED since the 2026-04-28 breaking change: new tables are not exposed automatically.
+-- Server role only (least privilege); deliberately no grants to anon/authenticated.
+grant select, insert, update, delete on table
+  public.ares_sessions, public.ares_instances, public.ares_scenarios, public.ares_events, public.ares_plans,
+  public.ares_plan_validations, public.ares_votes, public.ares_commitments, public.ares_messages,
+  public.ares_agent_states, public.ares_agent_memory
+to service_role;
+```
+
+Design notes (from Supabase's Postgres best practices):
+- **Keys:** every child table's primary key **starts with `session_id`**, so the PK index also serves the foreign key and every per-session read. Keys reuse the app's own ids (`seq`, `version`, `'C-3'`), and the app generates all of them, including the UUIDv7 session id. The write-behind sync never needs a round trip to learn an id, and there are no sequences, so no sequence grants are needed.
+- **Types:** `text` + `check` for enums, `timestamptz` everywhere, `jsonb` for nested objects, plus **flattened columns** (modes, risk, status, source, owner…) for SQL you'll actually run: *"every sacrifice refusal across all sessions"*, *"average rounds to approval"*.
+- **Search:** a stored generated `tsvector` + GIN index, so cross-session transcript search (Phase 3) is an index scan, not `LIKE '%…%'`.
+- **Upserts:** supabase-js `.upsert(rows, { onConflict })` sends `insert … on conflict (pk) do update`. It's atomic and idempotent, so retries and replays can never duplicate rows.
+
+**Apply the migration (pick one):**
+- **A. Dashboard (fastest, no CLI login):** Supabase Dashboard → SQL Editor → paste the migration file → Run.
+- **B. CLI, linked (best for the repo):** `npx supabase login` (for scripts, prefer a **scoped** personal access token in `SUPABASE_ACCESS_TOKEN` over the browser login, which creates a full-access token) → `npx supabase link --project-ref <ref>` (the ref is the subdomain of `SUPABASE_URL`) → `npm run db:push`.
+- **C. CLI, no login:** `npx supabase db push --db-url "<Session pooler connection string, percent-encoded>"`, copied from Dashboard → Connect. Use the **pooler** string: the direct `db.<ref>.supabase.co` host is IPv6-only on many plans, and many home networks lack IPv6.
+
+`scripts/db.mjs` (cross-platform Node, no shell tricks): loads `.env` with `process.loadEnvFile()`, maps `DB_PASSWORD` → `SUPABASE_DB_PASSWORD` (the variable the CLI reads), and runs one of:
+- `push` → `npx supabase db push --linked`
+- `advisors` → `npx supabase db advisors --linked --type all --level warn`
+- `types` → `npx supabase gen types typescript --linked --schema public`, written to `src/server/db/database.types.ts` (optional; enables `createClient<Database>()`)
+- `check` → a supabase-js head-count query per `ares_*` table, printing `OK` / `MISSING GRANT (42501)` / `MISSING TABLE (run the migration)`
+
+After applying, run `npm run db:check` (all OK) and `npm run db:advisors`. The Security Advisor may list *"RLS enabled, no policy"* (INFO) for these tables. That is **intended**: they are server-only, and anon/authenticated hold no grants. If you applied via option A and later switch to the CLI, mark the migration applied with `npx supabase migration repair` (check `--help` for its flags) so `db push` doesn't re-run it.
+
+#### 7.2.3 Supabase client (`db/supabase.ts`) and row mapping (`db/mappers.ts`, `db/rows.ts`)
+
+```ts
+import 'server-only';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+declare global { var __aresSupabase: SupabaseClient | undefined }
+export function getSupabaseAdmin(env: ServerEnv): SupabaseClient | null {
+  if (env.storageDriver !== 'supabase') return null;
+  return (globalThis.__aresSupabase ??= createClient(env.SUPABASE_URL!, env.SUPABASE_SECRET_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }, // no user sessions on the server
+  }));
+}
+```
+- Every query uses `.abortSignal(AbortSignal.timeout(env.DB_TIMEOUT_MS))`, so a hung network can never stall the runtime.
+- `mappers.ts` is pure: `toRows(session) → Record<Table, Row[]>` and `fromRows(rows) → SessionState`. `Plan.validations` maps to `ares_plan_validations` (`report_no` = array index) and `Plan.votes` to `ares_votes`; both are re-nested on load. `AgentState.sessionItems` maps to `ares_agent_memory`. Messages copy `meta.model/latencyMs/traceId` into flat columns.
+- `rows.ts` holds zod schemas for every row type. Reads are validated (`jsonb` arrives as `unknown`). The generated `database.types.ts` (`npm run db:types`) is optional and complements them.
+
+#### 7.2.4 Write-behind sync (`db/sync.ts`): the heart of the integration
+
+```ts
+type Table = 'ares_sessions' | 'ares_instances' | 'ares_scenarios' | 'ares_events' | 'ares_plans' | 'ares_plan_validations'
+  | 'ares_votes' | 'ares_commitments' | 'ares_messages' | 'ares_agent_states' | 'ares_agent_memory';
+const FLUSH_ORDER: Table[] = ['ares_sessions', 'ares_instances', 'ares_scenarios', 'ares_events', 'ares_plans',
+  'ares_plan_validations', 'ares_votes', 'ares_commitments', 'ares_messages', 'ares_agent_states', 'ares_agent_memory'];
+const ON_CONFLICT: Record<Table, string> = {
+  ares_sessions: 'id', ares_instances: 'instance_id', ares_scenarios: 'session_id,scenario_id',
+  ares_events: 'session_id,event_id', ares_plans: 'session_id,version', ares_plan_validations: 'session_id,plan_version,report_no',
+  ares_votes: 'session_id,vote_id', ares_commitments: 'session_id,commitment_id', ares_messages: 'session_id,seq',
+  ares_agent_states: 'session_id,agent_id', ares_agent_memory: 'session_id,agent_id,item_no',
+};
+const APPEND_ONLY = new Set<Table>(['ares_events', 'ares_plan_validations', 'ares_votes', 'ares_messages', 'ares_agent_memory']);
+```
+
+- **Dirty tracking:** `markDirty(table, key)` is O(1) and stores `key → generation`. Only `mutations.ts` calls it, so it stays the single writer.
+- **Flush loop:** runs every `DB_FLUSH_MS` (200 ms) while dirty keys exist, with one flush in flight at a time. It walks tables in `FLUSH_ORDER` (parents before children satisfies the foreign keys) and builds rows **from the current state at flush time**, so ten updates to plan v3 coalesce into one row. Chunks of ≤ 500 rows go out as `sb.from(t).upsert(chunk, { onConflict: ON_CONFLICT[t], ignoreDuplicates: APPEND_ONLY.has(t) }).abortSignal(…)`. A key is cleared after success **only if its generation didn't change** while the request was in flight.
+- **Errors:**
+  - Network, timeout, 429, and 5xx are **retryable**: back off 0.5 → 1 → 2 → 4 → 8 → 15 s, state `DEGRADED`, keys kept.
+  - `42501` (missing GRANT), `PGRST205`/`42P01` (table missing: migration not applied), and 401 (bad key) are **configuration errors**: state `ERROR` with an actionable hint (*"Run the migration — phase1 §7.2.2"*), keys kept, re-probe every 30 s.
+  - `23xxx` constraint violations are **data bugs**: log the offending row, skip it, and post a `SYSTEM` notice. Never drop data silently.
+- **Status** goes into `PublicState.storage` and `/api/health`:
+  ```ts
+  interface StorageStatus {
+    driver: 'supabase' | 'file'; state: 'SYNCED' | 'SYNCING' | 'DEGRADED' | 'ERROR' | 'LOCAL_ONLY';
+    instanceId: string; project: string | null;      // e.g. "abcd1234.supabase.co": host only, never a key
+    pendingRows: number; lastSyncAt: string | null;
+    lastError: { code: string; message: string; hint: string } | null;
+    rowsWritten: Partial<Record<Table, number>>;     // since boot
+    dbMessageCount: number | null;                   // cached head-count for the current session (refreshed ≤ every 10 s)
+    leaseWarning: string | null;
+  }
+  ```
+- **`flushNow(timeoutMs = 5000)`:** an awaited best-effort flush. Used by `reset`, export, SIGTERM/SIGINT handlers, and tests.
+- **Lease heartbeat:** every 10 s, upsert `ares_instances` with `lease_owner` and `lease_expires_at = now + 30 s`. If, at boot, a different live owner holds this `instance_id`, set `leaseWarning` (*"Another runtime is writing instance 'local' — set a different ARES_INSTANCE_ID"*). It warns; it never blocks.
+- **Guarantee:** nothing in the negotiation path awaits Supabase. Database latency adds 0 ms to agent rounds, and an outage only changes the status badge.
+
+#### 7.2.5 Boot, recovery, archive (`db/load.ts`, `store/persistence.ts`)
+- **Boot (`runtime.ready()`; every route handler awaits it once):**
+  1. Read the local snapshot `DATA_DIR/<instance>/current.json`, if any.
+  2. In Supabase mode, follow `ares_instances.current_session_id` and call `loadSession(id)`. It runs the table selects in parallel. **Messages and agent memory are keyset-paginated** (`.gt('seq', last).order('seq').limit(1000)` per page), because the Data API returns at most 1,000 rows per request by default.
+  3. Pick the newer copy by `updatedAt`. If the local snapshot is newer (it crashed while the DB was down) or only local exists, call `markAllDirty()` for a full, idempotent resync. If neither exists, create a new session (UUIDv7) and mark it dirty.
+  4. If the DB is unreachable at boot, start from the local snapshot in state `DEGRADED`; the sync keeps retrying in the background.
+  5. If the loaded `run.status === 'RUNNING'`, set it to `INTERRUPTED` and post `SYSTEM` *"Server restarted during round N; negotiation interrupted. Use Resume."* This is the crash-recovery story.
+- **Archive and reset:** `reset()` marks the current session `status = 'archived'`, creates a new session, points `ares_instances.current_session_id` at it, and calls `flushNow()`. History is never deleted. `reset({ hard: true, confirm: 'DELETE' })` deletes this instance's sessions (`delete … where instance_id = $1`; children cascade) and its local files.
+- **History reads:** `listSessions()` (Supabase: `ares_sessions` for this instance, newest first, limit 50; file mode: the local index) and `getSession(id)` (the same loader as boot). `/api/state` always serves the in-memory current session, which is fastest and authoritative.
+
+#### 7.2.6 Persistence tests
+- `db/mappers.test.ts`: `fromRows(toRows(s))` deep-equals `s` for a full offline-run fixture (baseline + event, with votes, validations, commitments, memory items).
+- `db/sync.test.ts` uses a **fake client** that records calls and fails on demand. It asserts:
+  - FK order and chunks of ≤ 500 rows;
+  - coalescing (many dirties → one row) and `ignoreDuplicates` on append-only tables;
+  - generation-safe clearing;
+  - backoff on 503 and network errors;
+  - `ERROR` with a hint on `42501`, and recovery to `SYNCED`;
+  - a negotiation step never awaits the sync.
+- `store/local-snapshot.test.ts`: atomic write, `.bak` recovery, Windows-style `EPERM` retry (mock `fs.rename`).
+- `tests/integration/supabase.it.ts` (`npm run test:db`; reads `.env`): uses instance `it-<uuid>`. It runs an offline baseline + practice event, calls `flushNow()`, reloads with a fresh runtime, and asserts deep-equal state and `dbMessageCount === messages.length`. Then it deletes the test instance's sessions.
 
 ### 7.3 `bus.ts`
 Typed in-process pub/sub with a ring buffer (last 2,000 events) and monotonically increasing `eventId`, so SSE clients can resume with `Last-Event-ID`.
@@ -859,10 +1220,10 @@ type StreamEvent =
   | { type: 'toast'; level: 'info' | 'success' | 'warning' | 'error'; text: string }
   | { type: 'session.reset'; sessionId: string };
 ```
-`PublicState` = `SessionState` without `messages` and without `agents[*].sessionItems` (send `sessionItemCount` instead). Messages stream separately and are fetched in full via `/api/state`.
+`PublicState` = `SessionState` without `messages` and without `agents[*].sessionItems` (send `sessionItemCount` instead), **plus `storage: StorageStatus`** (§7.2.4). Messages stream separately and are fetched in full via `/api/state`.
 
 ### 7.4 `orchestrator/mutations.ts` (the only place state changes)
-Every mutation function: (1) mutates `SessionState`, (2) stamps `updatedAt`, (3) publishes the relevant bus events (`message.created` for each message, then **one** `state.updated`), and (4) calls `store.save()` (debounced).
+Every mutation function: (1) mutates `SessionState`, (2) stamps `updatedAt`, (3) publishes the relevant bus events (`message.created` for each message, then **one** `state.updated`), (4) calls `persistence.markDirty(table, key)` for every row it touched, and (5) schedules the local snapshot. Examples: `postMessage` → `ares_messages:<seq>` + `ares_sessions:<id>` (counters); `castVote` → `ares_votes:<voteId>` + `ares_plans:<version>`; `recordTurn` → `ares_agent_states:<agentId>` + new `ares_agent_memory` items.
 
 Key functions: `postMessage`, `setPhase`, `setAgentStatus`, `recordTurn`, `createOrReusePlan`, `attachValidation`, `castVote`, `offerCommitment`, `respondCommitment`, `invokeOverride`, `approvePlan`, `resolveScenario`, `startEventScenario`, `markPreviousPlan`, `applyCommitmentReview`.
 
@@ -879,15 +1240,19 @@ Next.js can bundle each route handler separately, so a module-level singleton is
 
 | Method | Behavior |
 |---|---|
+| `ready()` | Resolves once boot (§7.2.5) has finished. Every route handler awaits it before touching state. Also registers SIGTERM/SIGINT handlers that call `persistence.flushNow(3000)` |
 | `getPublicState()` / `getMessages(sinceSeq?)` | read |
 | `start({ resources?, overrides? })` | Only when `run.status === 'IDLE'` and S0 is PENDING, else 409. Validates resources (integers 0–999). Creates S0 with the judge-entered pool. Launches `negotiation.runScenario('S0')` **in the background** (`void this.loop(...)`). Returns 202 |
 | `interpretEvent(input)` | Pure preview (deterministic in Phase 1) plus a feasibility forecast (feasible counts under base and override, certificate if none). Does not mutate state |
 | `applyEvent(interpretation)` | Allowed once S0 has started. If a negotiation is running: abort it (AbortController), resolve the current scenario as `INTERRUPTED`, then proceed. Creates S(n+1) via `event-open.ts` and runs it in the background |
 | `resume()` | For DEADLOCK/TIMEOUT/INTERRUPTED: `maxRounds += 2`, a new deadline, continue the loop from `round + 1` |
-| `reset({ hard })` | Abort, `store.archiveAndCreate()` (history kept), emit `session.reset`. `hard` also deletes archived sessions |
+| `reset({ hard, confirm })` | Abort, archive the session (Supabase: `status = 'archived'`; file mode: archive copy), create a fresh session, `flushNow()`, emit `session.reset`. History is kept. `hard: true` with `confirm: 'DELETE'` deletes this instance's sessions |
 | `countersign(decision)` | Phase 3 (HITL) |
 
-✅ **Checkpoint 1D:** a vitest using a temp `DATA_DIR` creates a runtime, mutates it, flushes, reloads, and gets equal state. The interrupted-on-boot behavior works.
+✅ **Checkpoint 1D:**
+- **File mode** (`STORAGE_DRIVER=file`, temp `DATA_DIR`): a vitest creates a runtime, mutates it, flushes, reloads, and gets equal state. Interrupted-on-boot works.
+- **Supabase mode:** `npm run db:check` prints OK for all 11 tables. `npm run test:db` is green. After `npm run dev` and one offline run, the Supabase Table Editor shows rows in `ares_messages`, `ares_plans`, `ares_votes`, `ares_commitments`, `ares_agent_memory`. Restart the server: the same session and full transcript reload from Supabase.
+- `npm run test` still passes **with no network**. Unit tests never touch Supabase.
 
 ---
 
@@ -1326,7 +1691,7 @@ async function runScenario(sid: string, signal: AbortSignal) {
 5. Offers → `commitments.offer` → COMMITMENT (action OFFER). Responses → `commitments.respond` → COMMITMENT (ACCEPT/DECLINE).
 6. Agent status `DONE`; `lastSeenSeq` updated to the seq at turn start.
 
-✅ **Checkpoint 1F:** `tests/integration/negotiation.offline.test.ts` (temp DATA_DIR, `AGENT_MODE=offline`):
+✅ **Checkpoint 1F:** `tests/integration/negotiation.offline.test.ts` (temp DATA_DIR, `AGENT_MODE=offline`, `STORAGE_DRIVER=file`, no network):
 - baseline → `APPROVED` in round ≥ 3; compliance items for S0 all PASS; an approved plan ∈ {Path A, Path B}; ≥ 1 `SACRIFICE_REFUSAL`; ≥ 2 accepted distinct-owner returns.
 - then each practice event (fresh runtime each) → old plan INVALID, override invoked, `APPROVED` with a plan from the §1.3 override set, approval round ≥ 2 in that scenario, fresh votes on the new version.
 - the official sample JSON → `INFEASIBLE` with a certificate requesting +19 Power, resolved in round 1 with the hearing.
@@ -1342,16 +1707,16 @@ All route files: `export const runtime = 'nodejs'; export const dynamic = 'force
 
 | Method · Path | Body | Response |
 |---|---|---|
-| `GET /api/health` | — | `{ ok, mode, models: { commander, departments, fallback }, modelCheck: { [model]: 'ok' \| 'not_found' \| 'unchecked' \| 'error' }, tracing, dataDir, version }`. Live: check each model once with `new OpenAI().models.retrieve(id)` and cache it for 10 min |
+| `GET /api/health` | `?deep=1` (optional) | `{ ok, mode, models: { commander, departments, fallback }, modelCheck: { [model]: 'ok' \| 'not_found' \| 'unchecked' \| 'error' }, tracing, storage: StorageStatus, dataDir, version }`. Live: check each model once with `new OpenAI().models.retrieve(id)` and cache it for 10 min. `deep=1` adds `rowCounts` per `ares_*` table for the current session (head-count queries), so judges can see the database really holds the run |
 | `GET /api/state` | — | `{ state: PublicState, messages: CouncilMessage[] }` |
 | `GET /api/stream` | header `Last-Event-ID` | SSE (`text/event-stream`). Replays buffered events after the id, else sends `state.updated` immediately. Heartbeat comment every 15 s |
 | `POST /api/control/start` | `{ resources?: ResourceVector }` | 202 `{ sessionId }` / 409 |
 | `POST /api/control/resume` | — | 202 / 409 |
-| `POST /api/control/reset` | `{ hard?: boolean }` | 200 `{ sessionId }` |
+| `POST /api/control/reset` | `{ hard?: boolean, confirm?: 'DELETE' }` | 200 `{ sessionId }` (hard reset without `confirm: 'DELETE'` → 400) |
 | `POST /api/events/interpret` | `{ input: string \| object, kind: 'json' \| 'text' \| 'preset' \| 'manual', presetId?, effects? }` | `{ interpretation, forecast: { poolBefore, poolAfter, feasibleBase, feasibleOverride, previousPlanWouldBe: 'STALE' \| 'INVALID' \| null, certificate? } }` |
 | `POST /api/events/apply` | `{ interpretation }` | 202 `{ scenarioId }` |
-| `GET /api/export` | `?format=json` · `?format=csv&kind=transcript\|plans\|votes\|commitments` · `?format=final` (output-schema final allocation) | File download with `Content-Disposition` |
-| `GET /api/sessions` · `GET /api/sessions/[id]` | — | Archive list / full archived session (`params` is a Promise in Next 16: `const { id } = await params`) |
+| `GET /api/export` | `?format=json` · `?format=csv&kind=transcript\|plans\|votes\|commitments` · `?format=final` (output-schema final allocation) · optional `&sessionId=<uuid>` for an archived session | File download with `Content-Disposition`. The current session exports from memory, after `flushNow()`; archived sessions load from Supabase (or the local archive in file mode) |
+| `GET /api/sessions` · `GET /api/sessions/[id]` | — | Archive list / full archived session, read from **Supabase** (`ares_sessions` for this instance) or the local index in file mode (`params` is a Promise in Next 16: `const { id } = await params`) |
 
 **SSE route essentials:**
 
@@ -1386,7 +1751,7 @@ export async function GET(req: Request) {
 - `csv.ts`: RFC 4180 escaping. Transcript columns: `seq,timestamp,scenario,round,phase,plan_version,from,to,type,subtype,summary,body,source,model,latency_ms,fallback_reason,trace_id`. Plans: `version,scenario,round,status,LIFE_SUPPORT,MEDICAL,FOOD,ENGINEERING,power,water,oxygen,robot,bandwidth,risk,sacrifices,validation,failed_checks,accept_votes,reject_votes,hash`. Plus votes and commitments sheets.
 - `final`: `final_allocation.json` = `{ schema_note, scenario, decision, plan_version, plan_hash, validation, totals, reserve, total_risk, return_agreement, commander_decision, records: OutputSchemaRecord[] }` (one record per department, latest vote).
 
-✅ **Checkpoint 1G:** with `npm run dev`: `curl -N localhost:3000/api/stream` streams; `curl -X POST localhost:3000/api/control/start` starts a run; `/api/state` shows messages growing; `/api/export?format=csv&kind=transcript` downloads.
+✅ **Checkpoint 1G:** with `npm run dev`: `curl -N localhost:3000/api/stream` streams; `curl -X POST localhost:3000/api/control/start` starts a run; `/api/state` shows messages growing; `/api/export?format=csv&kind=transcript` downloads; `/api/health?deep=1` shows `storage.state: "SYNCED"` and `rowCounts.ares_messages` equal to the number of messages in `/api/state`.
 
 ---
 
@@ -1394,7 +1759,7 @@ export async function GET(req: Request) {
 
 **`/dev` page** (temporary, a plain Tailwind client component; Phase 2 builds the real UI at `/`): run status line (phase, round, plan version, deadline), resource inputs plus **Start**, preset event buttons (5 practice + official sample) via interpret→apply, **Reset**, **Resume**, export links, a live list of messages (`[seq] R{round} {type} {from}→{to}: summary` with a `FALLBACK` tag), and the current plan's latest validation as a check list. EventSource handles reconnects.
 
-**`scripts/simulate.ts`:** runs an `AresRuntime` in-process against a temp `DATA_DIR`. Flags: `--offline`, `--event=PRACTICE_SOLAR|…|official|none`, `--json` (dump the export). It prints a compact transcript, outcomes, timings, and the compliance table, then **exits non-zero if any applicable compliance item fails**. Phase 3 uses this to generate evidence and CI checks. Example: `npm run simulate -- --offline --event=PRACTICE_ROVER`.
+**`scripts/simulate.ts`:** runs an `AresRuntime` in-process against a temp `DATA_DIR`, with `STORAGE_DRIVER=file` by default so simulations never touch your database. Flags: `--offline`, `--event=PRACTICE_SOLAR|…|official|none`, `--json` (dump the export), `--db` (persist to Supabase under instance `sim-<timestamp>`; Phase 3 uses this for evidence runs). It prints a compact transcript, outcomes, timings, and the compliance table, then **exits non-zero if any applicable compliance item fails**. Phase 3 uses this to generate evidence and CI checks. Example: `npm run simulate -- --offline --event=PRACTICE_ROVER`.
 
 `scripts/reset-data.mjs`: deletes `DATA_DIR` contents (asks for `--yes`).
 
@@ -1411,6 +1776,7 @@ export async function GET(req: Request) {
    - zero or very few FALLBACK messages; latency per call is logged.
 4. If the live behavior is weak, **tune the prompts and packets, not the protocol**. Typical fixes: more numbers in the packet, a clearer ASK line per department, and remind departments that refusing without an alternative is a deadlock.
 5. Record observed latencies (per phase) in `application/docs/notes-phase1.md` for Phase 3 tuning.
+6. **Database:** after the live run, `/api/health?deep=1` shows `SYNCED` with matching counts. In the Supabase SQL Editor, `select type, count(*) from ares_messages group by type;` matches the transcript. Stop the dev server mid-negotiation and restart it: the session reloads from Supabase as `INTERRUPTED`, and Resume continues it.
 
 ---
 
@@ -1423,7 +1789,11 @@ export async function GET(req: Request) {
 - [ ] Gateway: timeout, repair retry, error classification, model failover, circuit breaker, labeled fallback.
 - [ ] Orchestrator: 7-phase rounds; min/max rounds; deadlines; requested-plan check; consent micro-turn; version-bound votes; vote clearing; engine-gated approval; deadlock; resume; interrupt on new event.
 - [ ] Post-event: event record, STALE/INVALID marking, commitment review, override gating, infeasibility proof and hearing, reaffirmation path.
-- [ ] Persistence survives restart; interrupted runs are recoverable.
+- [ ] Supabase schema migrated (11 `ares_*` tables, RLS on, `service_role`-only grants); `npm run db:check` all OK; `npm run db:advisors` shows no WARN/ERROR.
+- [ ] Write-behind sync: FK-ordered, idempotent upserts; negotiation never awaits the DB; retry/`DEGRADED`/`ERROR` states with hints; lease warning.
+- [ ] Persistence survives restart (from Supabase, or the local snapshot when newer or offline); interrupted runs are recoverable; the archive lists past sessions from Supabase.
+- [ ] Works fully with `STORAGE_DRIVER=file` (no Supabase credentials), which is how judges will usually run it.
+- [ ] No secret behind any `NEXT_PUBLIC_` name (boot guard); the browser never calls Supabase.
 - [ ] API + SSE + JSON/CSV/final exports working; fallback labeled in exports.
 - [ ] `/dev` console can drive a full baseline → event → renegotiation run.
 - [ ] Offline integration tests green; one live run reviewed against §12.
@@ -1441,7 +1811,13 @@ export async function GET(req: Request) {
 - **Next 16 dynamic params** are Promises: `await params`.
 - **Do not enable `cacheComponents`.** Route segment config (`dynamic`) is incompatible with it.
 - **Token creep** → `sessionInputCallback` trimming plus a 25-line inbox cap; packets must stay under ~1,500 tokens.
+- **Supabase `42501 permission denied`** → the GRANT block of the migration wasn't run. New tables are no longer exposed to the Data API automatically (breaking change, enforced 2026-10-30), and even `service_role` needs the explicit grant.
+- **`PGRST205` / "Could not find the table … in the schema cache"** → the migration wasn't applied to *this* project, or PostgREST hasn't reloaded yet. Re-run it, or run `notify pgrst, 'reload schema';` in the SQL Editor.
+- **Secret key returns 401 in the browser** → by design: Supabase rejects secret keys from browser user agents. All DB access stays in `src/server/**`.
+- **`supabase db push` can't connect** → use the Session pooler connection string (IPv4) instead of the direct `db.<ref>.supabase.co` host, or link the project (option B).
+- **History shows only 1,000 messages** → missing keyset pagination (§7.2.5). The Data API caps rows per request.
+- **Two dev servers on one instance id** → a `leaseWarning` appears; give each runtime its own `ARES_INSTANCE_ID`.
 
 ## 15. Hand-off to Phase 2
 
-Phase 2 consumes: `GET /api/state`, `GET /api/stream` (SSE events of §7.3), all `POST /api/control/*` and `/api/events/*` routes, `/api/export`, `/api/sessions`, plus the pure modules in `src/domain` and `src/engine`. The client may import these for previews: feasibility matrix, diffs, formatting. Keep `PublicState` stable; if you must change it, update `src/domain/schemas.ts` and note the change at the top of `phase2.md`.
+Phase 2 consumes: `GET /api/state`, `GET /api/stream` (SSE events of §7.3), all `POST /api/control/*` and `/api/events/*` routes, `/api/export`, `/api/sessions` (Supabase-backed archive), `/api/health` (including `storage`), `PublicState.storage` for the database status badge, plus the pure modules in `src/domain` and `src/engine`. The client may import these for previews: feasibility matrix, diffs, formatting. Keep `PublicState` stable; if you must change it, update `src/domain/schemas.ts` and note the change at the top of `phase2.md`.

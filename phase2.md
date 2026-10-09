@@ -90,7 +90,7 @@ Base 14 px; panel titles 12 px uppercase tracking-wider muted (`MISSION CONTROL`
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ ◉ ARES ACCORD · Colony Council   [S0 Baseline ✓][S1 Solar aftershock ●]   ● NEGOTIATING  R2/5      │ ← StatusBar (sticky)
-│   Plan v5 #3fa9c2 · VOTING 2/4 · ⏱ 02:14 left · LIVE gpt-5.6-terra · ● stream live · [⚙][?]       │
+│   Plan v5 #3fa9c2 · VOTING 2/4 · ⏱ 02:14 · LIVE gpt-5.6-terra · DB Supabase ✓ · ● live · [⚙][?] │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ MISSION CONTROL                                                          │ JUDGE CONTROLS          │
 │ ⚡ EVENT S1 · Solar aftershock — Power −4 (79→75) · CRISIS OVERRIDE ACTIVE│ [▶ Start] [⚡ Inject]   │
@@ -172,6 +172,14 @@ Keep `messages` and `state` in separate slices, and use fine-grained selectors (
 - `resourceRows(plan, scenario)` = per resource: `{ available, used, reserve, over, segments: [{dept, value}], requestedUsed }`.
 - `phaseStep(run)` maps the phase and round to the PDF's 7 protocol steps (§5.1).
 - `modeIndicator(state, messages)` → `LIVE · <model>` | `OFFLINE · rule-based` | `DEGRADED · fallback active` (an unrecovered `FALLBACK_NOTICE` in the last 60 s, or an open circuit).
+- `storageBadge(state.storage)` → a label, tone, and tooltip for the database status:
+  - `SYNCED` → **"DB · Supabase ✓"** (success)
+  - `SYNCING` → **"DB · syncing (n)"** (info)
+  - `DEGRADED` → **"DB · retrying — n pending, safe locally"** (amber)
+  - `ERROR` → **"DB · error: <hint>"** (danger)
+  - `LOCAL_ONLY` → **"DB · local file store"** (muted)
+
+  The tooltip shows the project host, instance id, last sync time, and rows written. Never a key.
 
 ---
 
@@ -244,9 +252,15 @@ Keep `messages` and `state` in separate slices, and use fine-grained selectors (
 | **↻ Resume** | the current scenario resolved as DEADLOCK/TIMEOUT/INTERRUPTED | `POST /api/control/resume` (+2 rounds) |
 | **⟲ Reset** | always | Confirm dialog: *"Archives this session (history stays in Session Archive) and starts a fresh council."* → `POST /api/control/reset` |
 | **⤓ Export ▾** | always | Session JSON · Transcript CSV · Plans CSV · Votes CSV · Commitments CSV · Final allocation (output_schema). Phase 3 adds "Evidence pack (.zip)" |
-| **⚙ Settings** | always | Sheet: read-only config (mode, models, limits, timeouts), presentation mode switch, judge access code field, link to `/api/health` |
+| **⚙ Settings** | always | Sheet: read-only config (mode, models, limits, timeouts), presentation mode switch, judge access code field, link to `/api/health`, and a **Database card** (below) |
 
 Disabled buttons always explain why in a tooltip (*"Negotiation in progress — inject will interrupt"* for Inject during a run, which is allowed but behind a confirmation).
+
+**Database card (in Settings).** It makes the persistence layer visible to judges:
+- Driver (`Supabase Postgres` or `Local file store`), project host, `ARES_INSTANCE_ID`, sync state, pending rows, last sync time, lease warning.
+- A **"Verify persistence"** button that calls `/api/health?deep=1` and shows a table of row counts per `ares_*` table for this session next to the in-memory counts (messages, plans, votes, commitments, agent memory items), with ✓ when they match.
+- In Supabase mode, a link *"Open in Supabase Table Editor"* (`https://supabase.com/dashboard/project/<ref>/editor`, with the ref taken from the project host). It's useful to the team; judges won't have access.
+- A **danger zone**: "Delete all sessions for this instance" (hard reset). It requires typing `DELETE` and sends `{ hard: true, confirm: 'DELETE' }`. The normal Reset button never deletes history.
 
 ### 5.6 InjectEventDialog (Phase 2 = deterministic intake; Phase 3 adds an LLM interpreter and a full effects editor)
 
@@ -269,7 +283,7 @@ Then **Apply & reconvene council** → `POST /api/events/apply` → close the di
 ## 6. Always-visible status
 
 ### 6.1 StatusBar (sticky top)
-Contents: brand · **ScenarioSwitcher** (pills `S0 Baseline ✓ APPROVED v2`, `S1 Solar aftershock ● R2`; clicking focuses the board and validation on that scenario, and a "follow live" pill returns to the current one) · **run status** (IDLE / NEGOTIATING / AWAITING COUNTERSIGN / APPROVED / INFEASIBLE / DEADLOCK / TIMEOUT / INTERRUPTED) · `R{round}/{max}` · **PlanChip** `Plan v5 #3fa9c2 · VOTING 2/4` (the plan stays visible throughout the run, as the PDF requires; click → History) · **Countdown** (§6.2) · **ModeIndicator** · **ConnectionDot** (live / reconnecting / offline) · settings · help.
+Contents: brand · **ScenarioSwitcher** (pills `S0 Baseline ✓ APPROVED v2`, `S1 Solar aftershock ● R2`; clicking focuses the board and validation on that scenario, and a "follow live" pill returns to the current one) · **run status** (IDLE / NEGOTIATING / AWAITING COUNTERSIGN / APPROVED / INFEASIBLE / DEADLOCK / TIMEOUT / INTERRUPTED) · `R{round}/{max}` · **PlanChip** `Plan v5 #3fa9c2 · VOTING 2/4` (the plan stays visible throughout the run, as the PDF requires; click → History) · **Countdown** (§6.2) · **ModeIndicator** · **StorageBadge** (§4.4; click → Settings Database card) · **ConnectionDot** (live / reconnecting / offline) · settings · help.
 
 ### 6.2 Countdown
 Shows `mm:ss` left until `deadlineAt` (from the server). It turns amber at 25 % remaining and red at 10 %. Once resolved it shows a stamp: **"Resolved in 0:41"** (green if ≤ 3:00 for event scenarios). This makes the PDF's 3-minute timing requirement visible.
@@ -300,7 +314,7 @@ Shows `mm:ss` left until `deadlineAt` (from the server). It turns amber at 25 % 
 - A caption that ties it to the agents: *"The Commander calls `list_feasible_plans` on this same engine — see 🔧 chips in the transcript."*
 
 ### 7.3 COMPLIANCE (our signature panel)
-- The `computeCompliance` items (Phase 1 §6.9), grouped **Baseline negotiation · Post-event recovery · System**, each with a status icon (PASS ✓ / FAIL ✗ / PENDING … / NA –), the PDF requirement text, a detail with numbers (*"First approval in round 3"*, *"Resolved in 41 s (limit 180 s)"*), and **evidence chips** that scroll to and flash the exact transcript messages.
+- The `computeCompliance` items (Phase 1 §6.9), grouped **Baseline negotiation · Post-event recovery · System**, each with a status icon (PASS ✓ / FAIL ✗ / PENDING … / NA –), the PDF requirement text, a detail with numbers (*"First approval in round 3"*, *"Resolved in 41 s (limit 180 s)"*), and **evidence chips** that scroll to and flash the exact transcript messages. The System group includes **`PERSISTED`** (*"132/132 messages persisted to Supabase · synced 0.3 s ago"*), with a chip that opens the Settings Database card.
 - Header: *"14/14 requirements met for this session"*. It is computed from the live run and never edited by hand.
 
 ### 7.4 LEDGER: commitment ledger
@@ -321,6 +335,7 @@ The goal is to prove *"each agent has its own goals, constraints, state, and mes
 - **Private memory:** the `memory` notes, labeled 🔒 *"Private to this agent — never shown to the other agents."*
 - **Ledger:** sacrifices taken (scenario, mode, plan version, returns received), commitments given and received with statuses.
 - **Runtime:** SDK session id, `sessionItemCount`, LLM calls, fallbacks, average latency, input/output tokens, model, latest trace id (link to the OpenAI Traces dashboard; tracing must be on).
+- **Persistence:** *"Private history persisted in Supabase — `ares_agent_memory`: 34 items · state in `ares_agent_states`"*. In file mode: *"local snapshot"*. This shows judges that each agent's message history is stored separately per agent.
 - **Messages:** this agent's own messages and the messages addressed to it (its inbox), filtered from the transcript.
 
 The **Council roster** (left column) shows five AgentCards: emblem, callsign, department, live status (thinking dots with phase / last action), requested mode, stance badge, vote light for the current plan, and FALLBACK/LLM counts. The Commander card shows the current action (*"drafting v5"*, *"validating"*).
@@ -328,7 +343,7 @@ The **Council roster** (left column) shows five AgentCards: emblem, callsign, de
 ---
 
 ## 9. Session Archive and read-only views
-- `/sessions`: a list of archived sessions (created, scenarios, outcomes, message count) with **Open**.
+- `/sessions`: a list of archived sessions (created, scenarios, outcomes, message count) with **Open**. In Supabase mode the list comes from `ares_sessions` (this instance, newest first) via `/api/sessions`, captioned *"Stored in Supabase Postgres"*. That's the PDF's persistent history, and it survives restarts and redeploys. In file mode it comes from the local archive.
 - `/sessions/[id]`: renders the **same dashboard components** from a static snapshot (`GET /api/sessions/[id]`), with no SSE and Judge Controls hidden, under a banner *"ARCHIVED SESSION — read-only"*. Export buttons work on the archive (`/api/export?sessionId=…`; add the query param server-side if missing).
 
 ## 10. Help dialog ("How to read this dashboard")
@@ -342,6 +357,7 @@ A single dialog (the `?` button) with short annotated sections: the panels by PD
 - Contrast ≥ 4.5:1 for text on panels. Statuses never use color alone.
 - Empty, loading, and error states for every panel (skeletons while hydrating; *"No plan drafted yet — the Commander drafts after Round 1 positions"*).
 - Zero React key warnings and zero console errors in a full run.
+- Agent-written text (LLM output, injected noise, event descriptions) is always rendered as plain React text, which React escapes. Never use `dangerouslySetInnerHTML` or render agent text as Markdown/HTML.
 
 ## 12. Verification (manual QA script; run it in both modes)
 
@@ -356,6 +372,7 @@ Run once with `AGENT_MODE=offline` (deterministic) and once live:
 8. Export each format; open the CSV in a spreadsheet; FALLBACK messages (offline run) are labeled in the files.
 9. Reset → fresh idle state; `/sessions` lists the archived session; opening it shows the full read-only history.
 10. Kill and restart `npm run dev` mid-negotiation → the UI reconnects, shows INTERRUPTED + Resume; Resume continues.
+11. **Database (Supabase mode):** the StorageBadge reads `DB · Supabase ✓` during the run (briefly `syncing (n)`). Settings → Database → **Verify persistence** shows matching counts for every table. In the Supabase Table Editor, `ares_messages` holds the same transcript. Run once with `STORAGE_DRIVER=file`: the badge reads `local file store`, everything else works, and the `PERSISTED` compliance item shows `NA`.
 11. Resize to 1280×720 and 1024 px wide → layout adapts; nothing overlaps; the transcript stays readable.
 
 ## 13. Definition of Done (Phase 2)
@@ -368,6 +385,7 @@ Run once with `AGENT_MODE=offline` (deterministic) and once live:
 - [ ] History with diffs, Feasibility Explorer with certificate, Compliance with evidence links, Ledger, Agent Mind, Session Archive, Help.
 - [ ] Outcome banners for APPROVED / INFEASIBLE (with simulate resupply) / DEADLOCK / TIMEOUT / INTERRUPTED; STALE/INVALID visible after events.
 - [ ] Presentation mode; responsive down to 1024 px; zero console errors; QA script (§12) passes in offline and live modes.
+- [ ] StorageBadge, Settings Database card (with Verify persistence and hard-reset danger zone), Supabase-backed Session Archive, persistence line in Agent Mind; the UI works identically in file mode.
 
 ## 14. Hand-off to Phase 3
-Phase 3 adds: the LLM event interpreter and effects editor inside InjectEventDialog (new tab "Describe in words"); the human countersign modal (`AWAITING_COUNTERSIGN`); the Resilience Lab (fault injection) in Settings; the "Evidence pack (.zip)" export item; the `/architecture` and `/health` pages; and an optional guided tour. Leave clean extension points: a tab registry in InjectEventDialog, an `ExportMenu` items array, and a Settings sheet section slot.
+Phase 3 adds: the LLM event interpreter and effects editor inside InjectEventDialog (new tab "Describe in words"); the human countersign modal (`AWAITING_COUNTERSIGN`); the Resilience Lab (fault injection, including a database outage) in Settings; **"Search all negotiations"** (Supabase full-text search across sessions); the "Evidence pack (.zip)" export item; the `/architecture` and `/health` pages; and an optional guided tour. Leave clean extension points: a tab registry in InjectEventDialog, an `ExportMenu` items array, and a Settings sheet section slot.
