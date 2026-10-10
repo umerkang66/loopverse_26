@@ -1,0 +1,122 @@
+{
+  "id": "ares-accord-2.1",
+  "title": "Ares Colony — Micrometeorite Storm",
+  "narrative": "A micrometeorite storm has damaged the solar field, opened a slow habitat leak, disrupted greenhouse cooling, and injured six crew members. The colony has 42 people.",
+  "colony": { "crew": 42, "injured": 6 },
+  "initialPool": { "power": 79, "water": 52, "oxygen": 59, "robot": 26, "bandwidth": 17 },
+  "policy": {
+    "baseRiskLimit": 24,
+    "baseMaxSacrifices": 1,
+    "requiredReturnCommitments": 2,
+    "crisisOverride": { "riskLimit": 28, "maxSacrifices": 2, "onlyAfterEvent": true, "onlyWhenBaselineInfeasible": true },
+    "minRoundsBeforeFirstApproval": 3,
+    "minRoundsAfterEvent": 2,
+    "defaultEventHourStep": 6
+  },
+  "modes": [
+    { "id": "L1", "department": "LIFE_SUPPORT", "tier": "STANDARD", "label": "Standard", "resources": { "power": 34, "water": 10, "oxygen": 42, "robot": 4, "bandwidth": 4 }, "risk": 1, "consequence": "Full mission: habitat sealed, air fully stabilized, all living zones open." },
+    { "id": "L2", "department": "LIFE_SUPPORT", "tier": "RESTRICTED", "label": "Restricted", "resources": { "power": 27, "water": 9, "oxygen": 36, "robot": 6, "bandwidth": 3 }, "risk": 5, "consequence": "Leak sealed and air stable, but slower atmospheric recovery creates recovery debt." },
+    { "id": "L3", "department": "LIFE_SUPPORT", "tier": "SACRIFICE", "label": "Sacrifice", "resources": { "power": 23, "water": 8, "oxygen": 33, "robot": 2, "bandwidth": 2 }, "risk": 9, "consequence": "Living zone closes; crew crowding and thermal limits continue for 48 hours." },
+    { "id": "M1", "department": "MEDICAL", "tier": "STANDARD", "label": "Standard", "resources": { "power": 28, "water": 12, "oxygen": 18, "robot": 3, "bandwidth": 10 }, "risk": 1, "consequence": "Full care: all six injured stabilized and treated with full monitoring and Earth telemetry." },
+    { "id": "M2", "department": "MEDICAL", "tier": "RESTRICTED", "label": "Restricted", "resources": { "power": 21, "water": 10, "oxygen": 14, "robot": 2, "bandwidth": 6 }, "risk": 5, "consequence": "Injured stabilized; treatment continues with reduced monitoring and telemetry — recovery debt." },
+    { "id": "M3", "department": "MEDICAL", "tier": "SACRIFICE", "label": "Sacrifice", "resources": { "power": 18, "water": 8, "oxygen": 12, "robot": 2, "bandwidth": 5 }, "risk": 9, "consequence": "One surgery is delayed and the patient remains unstable." },
+    { "id": "F1", "department": "FOOD", "tier": "STANDARD", "label": "Standard", "resources": { "power": 24, "water": 34, "oxygen": 8, "robot": 4, "bandwidth": 2 }, "risk": 1, "consequence": "Full crop cycle and greenhouse cooling loop protected." },
+    { "id": "F2", "department": "FOOD", "tier": "RESTRICTED", "label": "Restricted", "resources": { "power": 15, "water": 27, "oxygen": 5, "robot": 4, "bandwidth": 2 }, "risk": 5, "consequence": "Crop cycle continues with reduced cooling and yield — recovery debt." },
+    { "id": "F3", "department": "FOOD", "tier": "SACRIFICE", "label": "Sacrifice", "resources": { "power": 10, "water": 24, "oxygen": 5, "robot": 2, "bandwidth": 1 }, "risk": 9, "consequence": "One crop bay is abandoned; food reserve falls by 40 percent." },
+    { "id": "E1", "department": "ENGINEERING", "tier": "STANDARD", "label": "Standard", "resources": { "power": 26, "water": 6, "oxygen": 6, "robot": 22, "bandwidth": 10 }, "risk": 1, "consequence": "Full repair program on generation and critical systems." },
+    { "id": "E2", "department": "ENGINEERING", "tier": "RESTRICTED", "label": "Restricted", "resources": { "power": 20, "water": 5, "oxygen": 5, "robot": 18, "bandwidth": 7 }, "risk": 5, "consequence": "Repairs continue at reduced pace — recovery debt on generation capacity." },
+    { "id": "E3", "department": "ENGINEERING", "tier": "SACRIFICE", "label": "Sacrifice", "resources": { "power": 16, "water": 4, "oxygen": 4, "robot": 14, "bandwidth": 5 }, "risk": 9, "consequence": "The rover is cannibalized; future repair capacity is reduced." }
+  ],
+  "compensationGuide": {
+    "L3": {
+      "lost": "Living zone closes; crew crowding and thermal limits continue for 48 hours",
+      "referenceReturns": [
+        { "owner": "ENGINEERING", "kind": "RESOURCE_SHARE", "resource": "robot", "amount": 4, "promise": "Engineering commits 4 of its Robot units to habitat inspection", "expiry": { "unit": "HOURS", "value": 48, "label": "48 hours" } },
+        { "owner": "COMMANDER", "kind": "PRIORITY", "resource": null, "amount": null, "promise": "Commander gives habitat restoration first priority next cycle", "expiry": { "unit": "CYCLES", "value": 1, "label": "next cycle" } }
+      ]
+    },
+    "M3": {
+      "lost": "One surgery is delayed and the patient remains unstable",
+      "referenceReturns": [
+        { "owner": "LIFE_SUPPORT", "kind": "RESOURCE_SHARE", "resource": "oxygen", "amount": 3, "promise": "Life Support reserves 3 of its Oxygen units for care", "expiry": { "unit": "HOURS", "value": 48, "label": "48 hours" } },
+        { "owner": "COMMANDER", "kind": "PRIORITY", "resource": null, "amount": null, "promise": "Commander gives Medical first priority next cycle", "expiry": { "unit": "CYCLES", "value": 1, "label": "next cycle" } }
+      ]
+    },
+    "F3": {
+      "lost": "One crop bay is abandoned; food reserve falls by 40 percent",
+      "referenceReturns": [
+        { "owner": "ENGINEERING", "kind": "FUTURE_RESOURCE", "resource": "robot", "amount": 4, "promise": "Engineering commits 4 future Robot units to greenhouse rebuild", "expiry": { "unit": "CYCLES", "value": 2, "label": "within two cycles" } },
+        { "owner": "COMMANDER", "kind": "FUTURE_RESOURCE", "resource": "water", "amount": null, "promise": "Commander protects the next Water increase for Food", "expiry": { "unit": "CYCLES", "value": 1, "label": "next cycle" } }
+      ]
+    },
+    "E3": {
+      "lost": "The rover is cannibalized; future repair capacity is reduced",
+      "referenceReturns": [
+        { "owner": "COMMANDER", "kind": "RESERVE_ASSIGNMENT", "resource": "water", "amount": 2, "promise": "Commander assigns the 2-unit Water reserve to rover cooling", "expiry": { "unit": "HOURS", "value": 48, "label": "48 hours" } },
+        { "owner": "FOOD", "kind": "PRIORITY", "resource": "water", "amount": null, "promise": "Food gives Engineering first priority on the next recovered Water", "expiry": { "unit": "CYCLES", "value": 1, "label": "next cycle" } }
+      ]
+    }
+  },
+  "agents": [
+    {
+      "id": "COMMANDER", "callsign": "ACTUAL", "name": "Commander Rhea Vasquez", "title": "Colony Commander", "departmentName": "Command",
+      "mission": "Coordinate the plan and approve it", "mainConcern": "Colony-wide safety",
+      "goals": ["Every mission matters: reach a plan all four departments accept and the validator passes", "Protect lives now and the colony's ability to recover", "Rotate severe losses fairly across crises", "Honor every promise the council makes"],
+      "constraints": ["Cannot approve without a validator PASS and four ACCEPT votes on the same plan version", "Cannot change package numbers", "Crisis Override only after an event and only when no plan fits the baseline limits"],
+      "redLines": ["Never approve a plan the validator failed", "Never ask a department to sacrifice without two concrete returns"],
+      "voice": "Calm, decisive, transparent about trade-offs", "color": "#A78BFA"
+    },
+    {
+      "id": "LIFE_SUPPORT", "callsign": "HAVEN", "name": "Noor Haddad", "title": "Life Support Chief", "departmentName": "Life Support",
+      "mission": "Seal the habitat and stabilize the air", "mainConcern": "Oxygen and continuous power",
+      "goals": ["Breathable air for all 42 crew, including the 6 injured", "Seal the slow habitat leak before it widens", "Keep living zones open and within thermal limits"],
+      "constraints": ["Run exactly one published package", "Never alter package numbers", "Obey the validator's verdict"],
+      "redLines": ["No Sacrifice mode without two concrete, affordable returns from different agents"],
+      "voice": "Calm, protective, terse; thinks in hours of breathable air", "color": "#22D3EE"
+    },
+    {
+      "id": "MEDICAL", "callsign": "MERIDIAN", "name": "Dr. Tomas Lindqvist", "title": "Chief Medical Officer", "departmentName": "Medical",
+      "mission": "Stabilize and treat the injured crew", "mainConcern": "Power, oxygen, and bandwidth",
+      "goals": ["Keep all six injured crew stable", "Protect surgical capacity and the Earth telemedicine link", "Prefer plans that keep an oxygen margin for patients"],
+      "constraints": ["Run exactly one published package", "Never alter package numbers", "Obey the validator's verdict"],
+      "redLines": ["No Sacrifice mode without two concrete, affordable returns from different agents"],
+      "voice": "Clinical, precise; cites patient impact", "color": "#FB7185"
+    },
+    {
+      "id": "FOOD", "callsign": "VERDANT", "name": "Priya Natarajan", "title": "Food Production Lead", "departmentName": "Food Production",
+      "mission": "Protect the crop cycle and cooling loop", "mainConcern": "Water and power",
+      "goals": ["Food security for 42 crew over the coming months", "Restore greenhouse cooling", "Protect the water draw (F-modes use 24–34 Water)"],
+      "constraints": ["Run exactly one published package", "Never alter package numbers", "Obey the validator's verdict"],
+      "redLines": ["No Sacrifice mode without two concrete, affordable returns from different agents"],
+      "voice": "Long-horizon; frames losses in weeks of food", "color": "#A3E635"
+    },
+    {
+      "id": "ENGINEERING", "callsign": "FORGE", "name": "Mateo Okafor", "title": "Chief Engineer", "departmentName": "Engineering",
+      "mission": "Repair generation and critical systems", "mainConcern": "Robot time and bandwidth",
+      "goals": ["Restore solar generation capacity", "Keep the rover and repair robots operational", "Preserve repair capacity for the next storm"],
+      "constraints": ["Run exactly one published package", "Never alter package numbers", "Obey the validator's verdict"],
+      "redLines": ["No Sacrifice mode without two concrete, affordable returns from different agents"],
+      "voice": "Blunt, pragmatic, numbers-first", "color": "#F59E0B"
+    }
+  ],
+  "practiceEvents": [
+    { "event_id": "PRACTICE_SOLAR", "event_name": "Solar aftershock", "description": "Available Power decreases by 4", "impact": { "power_delta": -4 }, "requires_replan": true },
+    { "event_id": "PRACTICE_WATER", "event_name": "Water contamination", "description": "Available Water decreases by 3", "impact": { "water_delta": -3 }, "requires_replan": true },
+    { "event_id": "PRACTICE_OXYGEN", "event_name": "Secondary oxygen leak", "description": "Available Oxygen decreases by 3", "impact": { "oxygen_delta": -3 }, "requires_replan": true },
+    { "event_id": "PRACTICE_ROVER", "event_name": "Rover actuator failure", "description": "Available Robot time decreases by 4", "impact": { "robot_time_delta": -4 }, "requires_replan": true },
+    { "event_id": "PRACTICE_RELAY", "event_name": "Relay interference", "description": "Available Bandwidth decreases by 2", "impact": { "bandwidth_delta": -2 }, "requires_replan": true }
+  ],
+  "officialSampleEvent": {
+    "event_id": "CRISIS_002",
+    "event_name": "Solar Aftershock",
+    "trigger_time": "Hour 14",
+    "description": "Secondary solar flare detected. Power generation capacity drops by 30% for next 6 hours.",
+    "impact": {
+      "power_reduction_percent": 30,
+      "duration_hours": 6,
+      "affected_systems": ["solar_array_A", "solar_array_B"]
+    },
+    "requires_replan": true,
+    "message_to_commander": "ALERT: Solar Aftershock detected. Immediate resource reallocation required. Council must reconvene."
+  }
+}

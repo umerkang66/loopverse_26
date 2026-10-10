@@ -1,0 +1,51 @@
+{
+  "name": "ares-accord",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:db": "vitest run --config vitest.db.config.mts",
+    "simulate": "tsx --conditions=react-server --env-file-if-exists=.env scripts/simulate.ts",
+    "reset:data": "node scripts/reset-data.mjs",
+    "db:push": "node scripts/db.mjs push",
+    "db:check": "node scripts/db.mjs check",
+    "db:advisors": "node scripts/db.mjs advisors",
+    "db:types": "node scripts/db.mjs types",
+    "check": "npm run typecheck && npm run lint && npm run test"
+  },
+  "dependencies": {
+    "@openai/agents": "0.20.0",
+    "@supabase/supabase-js": "2.117.3",
+    "fflate": "^0.8.3",
+    "next": "16.4.0",
+    "openai": "^7.31.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "server-only": "^0.0.1",
+    "uuid": "^14.0.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "^4",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "babel-plugin-react-compiler": "1.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.0",
+    "supabase": "2.120.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.15",
+    "typescript": "^5",
+    "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=22.9"
+  }
+}
