@@ -69,7 +69,7 @@ export function JudgeControls() {
       <PanelTitle>
         <span id="judge-controls">Judge Controls</span>
       </PanelTitle>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6 xl:grid-cols-2">
         <Control why={c.start.why} disabled={!c.start.enabled}>
           <Button onClick={() => openDialog('start')} disabled={!c.start.enabled} className="w-full">
             <Play /> Start crisis

@@ -32,7 +32,7 @@ export function SettingsSheet() {
         if (!o) setUi({ settingsFocus: null });
       }}
     >
-      <SheetContent side="right" className="w-full gap-0 overflow-y-auto bg-panel sm:max-w-[560px]">
+      <SheetContent side="right" className="gap-0 overflow-y-auto bg-panel data-[side=right]:w-full data-[side=right]:sm:max-w-[560px]">
         <SheetHeader>
           <SheetTitle>Settings</SheetTitle>
           <SheetDescription>Read-only configuration, presentation, access, and the persistence layer.</SheetDescription>

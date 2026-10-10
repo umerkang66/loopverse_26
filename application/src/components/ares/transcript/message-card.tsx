@@ -7,7 +7,6 @@ import { cn } from '@/lib/utils';
 import type { CouncilMessage } from '@/domain/types';
 import { ACTOR_META, MESSAGE_TYPE_META, OBJECTION_LABEL } from '@/client/theme';
 import { clock } from '@/client/format';
-import { useAres } from '@/client/store';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ActorLabel, Pill, SourceBadge, Tip } from '../bits';
 import { MessageBody } from './bodies';

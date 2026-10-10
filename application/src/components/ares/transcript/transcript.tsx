@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, Filter, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { AGENT_IDS, MESSAGE_TYPES, type CouncilMessage, type MessageSource, type Scenario } from '@/domain/types';
-import { EMPTY_FILTERS, useAres, type Filters } from '@/client/store';
+import { EMPTY_FILTERS, useAres, useAresApi, type Filters } from '@/client/store';
 import { ACTOR_META, MESSAGE_TYPE_META, SOURCE_TONE, TONE_CLASS } from '@/client/theme';
 import { clock, mmss } from '@/client/format';
 import { Button } from '@/components/ui/button';
@@ -73,7 +73,10 @@ export function Transcript() {
   const highlightNonce = useAres((s) => s.ui.highlightNonce);
   const setUi = useAres((s) => s.setUi);
   const setFilters = useAres((s) => s.setFilters);
+  const api = useAresApi();
   const listRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const lastUserInput = useRef(0);
   const [mountedAt] = useState(() => Date.now());
   const [unseenFrom, setUnseenFrom] = useState<number | null>(null);
 
@@ -82,11 +85,23 @@ export function Transcript() {
   const items = useMemo(() => buildItems(filtered, scenarios ?? []), [filtered, scenarios]);
   const unseen = unseenFrom === null ? 0 : Math.max(0, filtered.length - unseenFrom);
 
-  // Follow live output while the reader is at the bottom.
+  // Follow live output: re-pin whenever the content grows (new messages, lazily rendered groups, thinking bubbles).
+  useEffect(() => {
+    const el = listRef.current;
+    const inner = innerRef.current;
+    if (!el || !inner) return;
+    const pin = () => {
+      if (api.getState().ui.autoScroll) el.scrollTop = el.scrollHeight;
+    };
+    const ro = new ResizeObserver(pin);
+    ro.observe(inner);
+    pin();
+    return () => ro.disconnect();
+  }, [api]);
   useEffect(() => {
     const el = listRef.current;
     if (el && autoScroll) el.scrollTop = el.scrollHeight;
-  }, [filtered.length, autoScroll, state?.run.activeAgents.length]);
+  }, [autoScroll, filtered.length]);
 
   // Evidence chips, "responds to" links, and #M-0042 anchors scroll to and flash a message.
   useEffect(() => {
@@ -103,9 +118,14 @@ export function Transcript() {
     el.classList.add('flash');
   }, [highlightId, highlightNonce, filters, messages, setFilters, setUi]);
 
+  const markUserInput = () => {
+    lastUserInput.current = Date.now();
+  };
+
+  // Only the reader's own scrolling (wheel, touch, keys, scrollbar) can stop "follow live".
   const onScroll = () => {
     const el = listRef.current;
-    if (!el) return;
+    if (!el || Date.now() - lastUserInput.current > 1000) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     if (atBottom !== autoScroll) setUi({ autoScroll: atBottom });
     setUnseenFrom(atBottom ? null : (unseenFrom ?? filtered.length));
@@ -128,18 +148,29 @@ export function Transcript() {
       <FilterBar />
       <OutcomeBanners />
       <div className="relative min-h-0 flex-1">
-        <div ref={listRef} onScroll={onScroll} className="scrollbar-thin absolute inset-0 flex flex-col gap-2 overflow-y-auto pr-1 pb-16" aria-live="off">
-          {messages.length === 0 && <TranscriptEmpty />}
-          {items.map((item) =>
-            item.kind === 'scenario' ? (
-              <ScenarioDivider key={item.key} sc={item.sc} scenarioId={item.scenarioId} />
-            ) : item.kind === 'round' ? (
-              <RoundDivider key={item.key} round={item.round} planVersion={item.planVersion} />
-            ) : (
-              <TurnGroup key={item.key} messages={item.messages} fresh={lastFresh(item.messages)} />
-            ),
-          )}
-          <ThinkingBubbles />
+        <div
+          ref={listRef}
+          onScroll={onScroll}
+          onWheel={markUserInput}
+          onTouchMove={markUserInput}
+          onPointerDown={markUserInput}
+          onKeyDown={markUserInput}
+          className="scrollbar-thin absolute inset-0 overflow-y-auto pr-1"
+          aria-live="off"
+        >
+          <div ref={innerRef} className="flex flex-col gap-2 pb-16">
+            {messages.length === 0 && <TranscriptEmpty />}
+            {items.map((item) =>
+              item.kind === 'scenario' ? (
+                <ScenarioDivider key={item.key} sc={item.sc} scenarioId={item.scenarioId} />
+              ) : item.kind === 'round' ? (
+                <RoundDivider key={item.key} round={item.round} planVersion={item.planVersion} />
+              ) : (
+                <TurnGroup key={item.key} messages={item.messages} fresh={lastFresh(item.messages)} />
+              ),
+            )}
+            <ThinkingBubbles />
+          </div>
         </div>
         {unseen > 0 && !autoScroll && (
           <button type="button" onClick={jumpToEnd} className="absolute bottom-3 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-mars/50 bg-panel px-3 py-1 text-xs shadow-lg">

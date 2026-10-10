@@ -134,7 +134,7 @@ export function HelpDialog() {
             <div className="flex flex-col gap-1.5">
               <h3 className="panel-title">Source of every message</h3>
               <p>
-                <Pill tone="success">LLM</Pill> <span className="text-muted-foreground">written by the agent's live model call (model and latency shown)</span>
+                <Pill tone="success">LLM</Pill> <span className="text-muted-foreground">written by the agent&apos;s live model call (model and latency shown)</span>
               </p>
               <p>
                 <Pill tone="amber">FALLBACK</Pill> <span className="text-muted-foreground">rule-based policy, used only when a model call failed — always labeled</span>

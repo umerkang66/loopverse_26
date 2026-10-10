@@ -28,7 +28,7 @@ export function RightPanel({ only }: { only?: RightTab[] }) {
   const value = tabs.some((t) => t.id === tab) ? tab : tabs[0]!.id;
   return (
     <Tabs value={value} onValueChange={(v) => setUi({ rightTab: v as RightTab })} className="flex h-full min-h-0 flex-col gap-2">
-      <TabsList className="flex h-auto w-full flex-wrap justify-start gap-0.5 bg-panel p-1">
+      <TabsList className="flex w-full flex-wrap justify-start gap-0.5 bg-panel p-1 group-data-horizontal/tabs:h-auto">
         {tabs.map((t) => (
           <TabsTrigger key={t.id} value={t.id} className="h-7 flex-none px-2 text-xs">
             {t.label}

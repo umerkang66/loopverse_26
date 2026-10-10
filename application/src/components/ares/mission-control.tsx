@@ -23,6 +23,11 @@ import {
 import { ACTOR_META } from '@/client/theme';
 import { AgentEmblem, PanelTitle, Pill, Tip } from './bits';
 
+/** Start offset of each segment in a stacked bar. */
+function cumulative(values: number[]): number[] {
+  return values.map((_, i) => values.slice(0, i).reduce((a, b) => a + b, 0));
+}
+
 export function MissionControl() {
   const state = useAres((s) => s.state);
   const messages = useAres((s) => s.messages);
@@ -101,7 +106,7 @@ function IdleGauges() {
 function Gauges({ state, sc, plan }: { state: PublicState; sc: Scenario; plan: Plan | null }) {
   const rows = resourceRows(plan, sc, requestedSelections(state));
   return (
-    <div className="grid grid-cols-1 gap-x-6 gap-y-1.5 md:grid-cols-2 2xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-x-5 gap-y-1.5 md:grid-cols-2 xl:grid-cols-3">
       {rows.map((r) => (
         <ResourceGauge key={r.key} row={r} />
       ))}
@@ -112,38 +117,34 @@ function Gauges({ state, sc, plan }: { state: PublicState; sc: Scenario; plan: P
 function ResourceGauge({ row }: { row: ResourceRow }) {
   const scale = Math.max(row.available, row.used, row.requestedUsed ?? 0, 1);
   const pct = (v: number) => `${(v / scale) * 100}%`;
-  let x = 0;
+  const offsets = cumulative(row.segments.map((s) => s.value));
   const tooltip = row.segments.length
     ? row.segments.map((s) => `${ACTOR_META[s.dept].callsign} ${s.mode}: ${s.value}`).join(' · ')
     : 'No plan on the table yet';
   return (
-    <div className="grid grid-cols-[86px_1fr_auto] items-center gap-2 text-xs">
+    <div className="grid grid-cols-[72px_1fr_auto] items-center gap-2 text-xs">
       <span className="text-muted-foreground">{RESOURCE_LABEL[row.key].name}</span>
       <Tip content={`${tooltip}${row.requestedUsed !== null ? ` · requested combination: ${row.requestedUsed}` : ''}${row.reserveRequired ? ` · ${row.reserveRequired} held in required reserve` : ''}`}>
         <div className="relative h-3.5 rounded-sm" role="img" aria-label={`${RESOURCE_LABEL[row.key].name}: ${row.used} used of ${row.available}${row.over ? `, over by ${row.over}` : ''}`}>
           <div className="absolute inset-y-0 left-0 rounded-sm bg-panel-2 ring-1 ring-border" style={{ width: pct(row.available) }} />
           {row.reserveRequired > 0 && <div className="hatch-muted absolute inset-y-0" style={{ left: pct(row.cap), width: pct(row.reserveRequired) }} />}
-          {row.segments.map((s) => {
-            const left = x;
-            x += s.value;
-            return (
-              <motion.div
-                key={s.dept}
-                className="absolute inset-y-0.5"
-                initial={false}
-                animate={{ left: pct(left), width: pct(s.value) }}
-                transition={{ duration: 0.3, ease: 'easeOut' }}
-                style={{ backgroundColor: ACTOR_META[s.dept].color, opacity: 0.85 }}
-              />
-            );
-          })}
+          {row.segments.map((s, i) => (
+            <motion.div
+              key={s.dept}
+              className="absolute inset-y-0.5"
+              initial={false}
+              animate={{ left: pct(offsets[i]!), width: pct(s.value) }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              style={{ backgroundColor: ACTOR_META[s.dept].color, opacity: 0.85 }}
+            />
+          ))}
           {row.over > 0 && <div className="hatch-danger absolute inset-y-0 rounded-r-sm" style={{ left: pct(row.cap), width: pct(row.over) }} />}
           {row.requestedUsed !== null && (
             <div className="absolute -inset-y-0.5 w-0.5 bg-foreground/70" style={{ left: pct(Math.min(row.requestedUsed, scale)) }} title="Requested combination" />
           )}
         </div>
       </Tip>
-      <span className="num w-[120px] text-right">
+      <span className="num w-[112px] text-right">
         <span className={row.over ? 'font-semibold text-danger' : undefined}>{row.used}</span>
         <span className="text-muted-foreground">/{row.available}</span>
         {row.over > 0 ? <span className="text-danger"> +{row.over}</span> : <span className="text-muted-foreground"> · reserve {row.leftover}</span>}
@@ -156,28 +157,24 @@ function RiskMeter({ sc, plan }: { sc: Scenario; plan: Plan | null }) {
   const { riskLimit } = limitsOf(sc);
   const risk = plan?.risk ?? 0;
   const scale = Math.max(riskLimit, risk, 1) * 1.08;
-  let x = 0;
+  const risks = plan ? DEPARTMENT_IDS.map((d) => getMode(plan.selections[d]).risk) : [];
+  const offsets = cumulative(risks);
   return (
     <div className="flex items-center gap-2 text-xs">
       <span className="text-muted-foreground">Risk</span>
       <Tip content={plan ? DEPARTMENT_IDS.map((d) => `${ACTOR_META[d].callsign} ${plan.selections[d]}: ${getMode(plan.selections[d]).risk}`).join(' · ') : 'No plan yet'}>
         <div className="relative h-3.5 w-48 rounded-sm bg-panel-2 ring-1 ring-border" role="img" aria-label={`Risk ${risk} of limit ${riskLimit}`}>
           {plan &&
-            DEPARTMENT_IDS.map((d) => {
-              const v = getMode(plan.selections[d]).risk;
-              const left = x;
-              x += v;
-              return (
-                <motion.div
-                  key={d}
-                  className="absolute inset-y-0.5 border-r border-background"
-                  initial={false}
-                  animate={{ left: `${(left / scale) * 100}%`, width: `${(v / scale) * 100}%` }}
-                  transition={{ duration: 0.3 }}
-                  style={{ backgroundColor: ACTOR_META[d].color, opacity: 0.85 }}
-                />
-              );
-            })}
+            DEPARTMENT_IDS.map((d, i) => (
+              <motion.div
+                key={d}
+                className="absolute inset-y-0.5 border-r border-background"
+                initial={false}
+                animate={{ left: `${(offsets[i]! / scale) * 100}%`, width: `${(risks[i]! / scale) * 100}%` }}
+                transition={{ duration: 0.3 }}
+                style={{ backgroundColor: ACTOR_META[d].color, opacity: 0.85 }}
+              />
+            ))}
           <div className="absolute -inset-y-1 w-0.5 bg-foreground" style={{ left: `${(riskLimit / scale) * 100}%` }} />
         </div>
       </Tip>

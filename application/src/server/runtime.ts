@@ -13,9 +13,7 @@ import {
   type DbTable,
   type EventEffect,
   type EventInterpretation,
-  type InfeasibilityCertificate,
   type PublicState,
-  type ResourceVector,
   type Scenario,
   type SessionState,
 } from '@/domain/types';

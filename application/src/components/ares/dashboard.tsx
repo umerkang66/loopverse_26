@@ -9,6 +9,7 @@ import { setUnauthorizedHandler } from '@/client/api';
 import { AresProvider, createAresStore, useAres, useAresApi } from '@/client/store';
 import { currentScenario } from '@/client/selectors';
 import { useAresStream } from '@/client/use-ares-stream';
+import { useMediaQuery } from '@/client/use-media-query';
 import { Button } from '@/components/ui/button';
 import { CouncilRoster } from './council-roster';
 import { IdleHero } from './idle-hero';
@@ -63,10 +64,14 @@ function Shell({ archived = false, reconnect, debug = false }: { archived?: bool
   usePresentation();
   useHashAnchor();
 
+  // One layout is mounted at a time (no hidden duplicates: element ids and anchors stay unique).
+  const desktop = useMediaQuery('(min-width: 1024px)');
+  const xl = useMediaQuery('(min-width: 1280px)');
+  const wide = useMediaQuery('(min-width: 1440px)');
   const center = !hasState ? <CenterSkeleton /> : started || archived ? <Transcript /> : <IdleHero />;
 
   return (
-    <div className="flex min-h-dvh flex-col lg:h-dvh lg:overflow-hidden">
+    <div className="flex min-h-dvh flex-col xl:h-dvh xl:overflow-hidden">
       <StatusBar archived={archived} />
       {archived && <ArchiveBanner />}
       {reconnect && <OfflineBanner reconnect={reconnect} />}
@@ -76,50 +81,49 @@ function Shell({ archived = false, reconnect, debug = false }: { archived?: bool
           <MissionControl />
           {!archived && <JudgeControls />}
         </div>
-        <div className="hidden lg:block xl:hidden">
-          <CouncilRoster variant="strip" />
-        </div>
+        {desktop && !xl && <CouncilRoster variant="strip" />}
 
         {/* ≥ 1024 px: independent scrolling columns */}
-        <div className="hidden min-h-0 flex-1 gap-3 lg:grid lg:grid-cols-[minmax(0,1fr)_420px] xl:grid-cols-[76px_minmax(0,1fr)_420px] min-[1440px]:grid-cols-[300px_minmax(0,1fr)_460px]">
-          <aside className="scrollbar-thin hidden min-h-0 overflow-y-auto xl:block" aria-label="Council roster">
-            <div className="hidden min-[1440px]:block">
-              <CouncilRoster variant="full" />
-            </div>
-            <div className="min-[1440px]:hidden">
-              <CouncilRoster variant="compact" />
-            </div>
-          </aside>
-          <main className="scrollbar-thin min-h-0 overflow-y-auto rounded-[10px] border bg-panel/40 p-3">{center}</main>
-          <aside className="min-h-0 rounded-[10px] border bg-panel/40 p-3" aria-label="Plan panels">
-            <RightPanel />
-          </aside>
-        </div>
+        {desktop && (
+          <div className="grid h-[82vh] min-h-[560px] gap-3 lg:grid-cols-[minmax(0,1fr)_420px] xl:h-auto xl:min-h-0 xl:flex-1 xl:grid-cols-[76px_minmax(0,1fr)_420px] wide:grid-cols-[300px_minmax(0,1fr)_460px]">
+            {xl && (
+              <aside className="scrollbar-thin min-h-0 overflow-y-auto" aria-label="Council roster">
+                <CouncilRoster variant={wide ? 'full' : 'compact'} />
+              </aside>
+            )}
+            <main className="scrollbar-thin min-h-0 overflow-y-auto rounded-[10px] border bg-panel/40 p-3">{center}</main>
+            <aside className="min-h-0 rounded-[10px] border bg-panel/40 p-3" aria-label="Plan panels">
+              <RightPanel />
+            </aside>
+          </div>
+        )}
 
         {/* < 1024 px: one column with top tabs */}
-        <div className="flex flex-col gap-3 lg:hidden">
-          <CouncilRoster variant="strip" />
-          <div className="flex gap-1" role="tablist" aria-label="Views">
-            {(['transcript', 'board', 'validation', 'more'] as const).map((t) => (
-              <Button key={t} role="tab" aria-selected={mobileTab === t} size="sm" variant={mobileTab === t ? 'secondary' : 'ghost'} onClick={() => setMobileTab(t)}>
-                {t === 'transcript' ? 'Transcript' : t === 'board' ? 'Board' : t === 'validation' ? 'Validation' : 'More'}
-              </Button>
-            ))}
+        {!desktop && (
+          <div className="flex flex-col gap-3">
+            <CouncilRoster variant="strip" />
+            <div className="flex gap-1" role="tablist" aria-label="Views">
+              {(['transcript', 'board', 'validation', 'more'] as const).map((t) => (
+                <Button key={t} role="tab" aria-selected={mobileTab === t} size="sm" variant={mobileTab === t ? 'secondary' : 'ghost'} onClick={() => setMobileTab(t)}>
+                  {t === 'transcript' ? 'Transcript' : t === 'board' ? 'Board' : t === 'validation' ? 'Validation' : 'More'}
+                </Button>
+              ))}
+            </div>
+            <div className="min-h-[70vh] rounded-[10px] border bg-panel/40 p-3">
+              {mobileTab === 'transcript' ? (
+                <div className="flex h-[70vh] flex-col">{center}</div>
+              ) : mobileTab === 'board' ? (
+                <RightPanel only={['board']} />
+              ) : mobileTab === 'validation' ? (
+                <RightPanel only={['validation']} />
+              ) : (
+                <div className="flex h-[70vh] flex-col">
+                  <RightPanel only={['history', 'feasibility', 'compliance', 'ledger', 'analytics']} />
+                </div>
+              )}
+            </div>
           </div>
-          <div className="min-h-[70vh] rounded-[10px] border bg-panel/40 p-3">
-            {mobileTab === 'transcript' ? (
-              <div className="flex h-[70vh] flex-col">{center}</div>
-            ) : mobileTab === 'board' ? (
-              <RightPanel only={['board']} />
-            ) : mobileTab === 'validation' ? (
-              <RightPanel only={['validation']} />
-            ) : (
-              <div className="flex h-[70vh] flex-col">
-                <RightPanel only={['history', 'feasibility', 'compliance', 'ledger', 'analytics']} />
-              </div>
-            )}
-          </div>
-        </div>
+        )}
       </div>
       {debug && (
         <Link href="/dev" className="fixed bottom-2 left-2 text-[10px] text-muted-foreground underline">

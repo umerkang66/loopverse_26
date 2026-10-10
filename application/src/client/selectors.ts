@@ -52,10 +52,14 @@ export function boardPlan(s: PublicState, sc: Scenario | null, showInForce: bool
 
 export const latestReport = (plan: Plan | null): ValidationReport | null => plan?.validations[plan.validations.length - 1] ?? null;
 
-/** Latest ballot per department bound to this exact version and hash. */
+/** Ballots stop counting once a version is superseded, STALE or INVALID: any new version needs four fresh votes. */
+export const VOTES_LIVE: readonly Plan['status'][] = ['READY', 'VOTING', 'APPROVED', 'RATIFIED', 'REJECTED'];
+export const votesCleared = (plan: Plan | null): boolean => !!plan && plan.votes.length > 0 && !VOTES_LIVE.includes(plan.status);
+
+/** Latest ballot per department bound to this exact version and hash (none once the version is no longer live). */
 export function votesFor(plan: Plan | null): Partial<Record<DepartmentId, Vote>> {
   const out: Partial<Record<DepartmentId, Vote>> = {};
-  if (!plan) return out;
+  if (!plan || !VOTES_LIVE.includes(plan.status)) return out;
   for (const v of plan.votes) if (v.planVersion === plan.version && v.planHash === plan.hash) out[v.agentId] = v;
   return out;
 }

@@ -21,7 +21,7 @@ export function AgentMindSheet() {
   const open = selected !== null && state !== null;
   return (
     <Sheet open={open} onOpenChange={(o) => !o && setUi({ selectedAgent: null })}>
-      <SheetContent side="right" className="w-full gap-0 overflow-y-auto border-l bg-panel p-0 sm:max-w-[640px]">
+      <SheetContent side="right" className="gap-0 overflow-y-auto border-l bg-panel p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[640px]">
         {open && <Mind id={selected} state={state} messages={messages} />}
       </SheetContent>
     </Sheet>

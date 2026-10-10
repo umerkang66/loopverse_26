@@ -4,7 +4,7 @@ import { RESOURCE_LABEL } from '@/domain/constants';
 import { getMode, isModeId } from '@/domain/scenario';
 import { DEPARTMENT_IDS, RESOURCE_KEYS, type Plan, type PublicState, type Scenario } from '@/domain/types';
 import { useAres } from '@/client/store';
-import { boardPlan, clearedVotes, deptView, focusDraft, focusScenario, planInForce, voteCounts, votesFor, type DeptView } from '@/client/selectors';
+import { boardPlan, clearedVotes, deptView, focusDraft, focusScenario, planInForce, voteCounts, votesCleared, votesFor, type DeptView } from '@/client/selectors';
 import { ACTOR_META, PLAN_STATUS_TONE } from '@/client/theme';
 import { hash8 } from '@/client/format';
 import { Switch } from '@/components/ui/switch';
@@ -159,6 +159,11 @@ function VotePanel({ state, plan, cleared }: { state: PublicState; plan: Plan; c
           </span>
         ))}
       </div>
+      {votesCleared(plan) && (
+        <p className="text-xs text-amber">
+          The {plan.votes.length} ballot{plan.votes.length === 1 ? '' : 's'} on v{plan.version} no longer count: the plan is {plan.status}. Any new version needs four fresh votes.
+        </p>
+      )}
       {cleared && (
         <p className="text-xs text-muted-foreground">
           Votes cleared at v{cleared.fromVersion} → v{plan.version} ({cleared.count} vote{cleared.count === 1 ? '' : 's'}) — any plan change requires fresh ballots.
