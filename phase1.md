@@ -993,6 +993,7 @@ create table public.ares_plans (
   diff              jsonb,
   rationale         text not null,
   status_reason     text,
+  data              jsonb not null,                          -- the full Plan (without validations/votes, which have their own tables)
   created_at        timestamptz not null,
   updated_at        timestamptz not null,
   primary key (session_id, version)
@@ -1000,15 +1001,15 @@ create table public.ares_plans (
 create index ares_plans_scenario_idx on public.ares_plans (session_id, scenario_id);
 
 create table public.ares_plan_validations (
-  session_id   uuid not null references public.ares_sessions (id) on delete cascade,
-  plan_version integer not null,
-  report_no    integer not null,                             -- position in Plan.validations
-  stage        text not null check (stage in ('DRY_RUN','PRE_VOTE','APPROVAL')),
-  status       text not null check (status in ('PASS','FAIL')),
-  plan_hash    text,
-  checks       jsonb not null,
-  warnings     jsonb not null,
-  evaluated_at timestamptz not null,
+  session_id    uuid not null references public.ares_sessions (id) on delete cascade,
+  plan_version  integer not null,
+  report_no     integer not null,                            -- position in Plan.validations
+  stage         text not null check (stage in ('DRY_RUN','PRE_VOTE','APPROVAL')),
+  status        text not null check (status in ('PASS','FAIL')),
+  plan_hash     text,
+  failed_checks text[] not null,
+  report        jsonb not null,                              -- the full ValidationReport
+  evaluated_at  timestamptz not null,
   primary key (session_id, plan_version, report_no)
 );
 
@@ -1103,6 +1104,14 @@ alter table public.ares_commitments      enable row level security;
 alter table public.ares_messages         enable row level security;
 alter table public.ares_agent_states     enable row level security;
 alter table public.ares_agent_memory     enable row level security;
+
+-- Older projects may still carry default privileges that grant new public tables to anon/authenticated:
+-- remove them explicitly so the publishable key can never reach these tables, whatever the project's defaults.
+revoke all on table
+  public.ares_sessions, public.ares_instances, public.ares_scenarios, public.ares_events, public.ares_plans,
+  public.ares_plan_validations, public.ares_votes, public.ares_commitments, public.ares_messages,
+  public.ares_agent_states, public.ares_agent_memory
+from anon, authenticated;
 
 -- Data API exposure. REQUIRED since the 2026-04-28 breaking change: new tables are not exposed automatically.
 -- Server role only (least privilege); deliberately no grants to anon/authenticated.
