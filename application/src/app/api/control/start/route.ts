@@ -7,6 +7,7 @@ export const dynamic = 'force-dynamic';
 const Body = z.object({
   resources: z.unknown().optional(),
   maxRounds: z.number().int().min(1).max(12).optional(),
+  deadlineSeconds: z.number().int().min(30).max(1800).optional(),
 });
 
 export const POST = route(

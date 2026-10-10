@@ -2,6 +2,7 @@ import 'server-only';
 import OpenAI from 'openai';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import type { EventForecast } from '@/domain/api';
 import { EVENT_PRESETS, INITIAL_POOL, SCENARIO } from '@/domain/scenario';
 import {
   AGENT_IDS,
@@ -50,16 +51,7 @@ export class HttpError extends Error {
   }
 }
 
-export interface EventForecast {
-  poolBefore: ResourceVector;
-  poolAfter: ResourceVector;
-  effects: string[];
-  feasibleBase: number;
-  feasibleOverride: number;
-  previousPlanWouldBe: 'STALE' | 'INVALID' | null;
-  previousPlanReasons: string[];
-  certificate: InfeasibilityCertificate | null;
-}
+export type { EventForecast };
 
 const EffectSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('RESOURCE_DELTA'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(-999).max(999) }),
@@ -251,7 +243,7 @@ export class AresRuntime {
   }
 
   // ── commands ──
-  start(input: { resources?: unknown; maxRounds?: number } = {}): Promise<{ sessionId: string; scenarioId: string }> {
+  start(input: { resources?: unknown; maxRounds?: number; deadlineSeconds?: number } = {}): Promise<{ sessionId: string; scenarioId: string }> {
     return this.exclusive(async () => {
       await this.ready();
       const s = this.mustState();
@@ -276,6 +268,7 @@ export class AresRuntime {
         maxSacrificesCap: null,
         minRoundsBeforeApproval: SCENARIO.policy.minRoundsBeforeFirstApproval,
         maxRounds: Math.min(12, Math.max(1, Math.round(input.maxRounds ?? this.env.MAX_ROUNDS_BASELINE))),
+        deadlineSeconds: input.deadlineSeconds ? Math.min(1800, Math.max(30, Math.round(input.deadlineSeconds))) : null,
         status: 'PENDING',
         outcome: null,
         outcomeReason: null,

@@ -58,7 +58,7 @@ export class NegotiationRunner {
     const sc = this.scenario(scenarioId);
     const { mut, env } = this.deps;
     if (sc.status === 'PENDING') {
-      const seconds = sc.kind === 'BASELINE' ? env.DEADLINE_BASELINE_SECONDS : env.DEADLINE_EVENT_SECONDS;
+      const seconds = sc.deadlineSeconds ?? (sc.kind === 'BASELINE' ? env.DEADLINE_BASELINE_SECONDS : env.DEADLINE_EVENT_SECONDS);
       mut.updateScenario(sc, {
         status: 'NEGOTIATING',
         startedAt: this.now(),

@@ -245,6 +245,8 @@ export interface Scenario {
   maxSacrificesCap: number | null;
   minRoundsBeforeApproval: number;
   maxRounds: number;
+  /** Judge override of the scenario deadline (seconds); null/absent = the configured default. */
+  deadlineSeconds?: number | null;
   status: ScenarioStatus;
   outcome: ScenarioOutcome | null;
   outcomeReason: string | null;

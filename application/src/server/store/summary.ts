@@ -1,20 +1,8 @@
 import 'server-only';
+import type { SessionListEntry, SessionSummary } from '@/domain/api';
 import type { SessionState } from '@/domain/types';
 
-export interface SessionSummary {
-  scenarios: { id: string; kind: string; title: string; outcome: string | null; approvedPlanVersion: number | null; round: number }[];
-  messageCount: number;
-  planCount: number;
-  mode: 'live' | 'offline';
-}
-
-export interface SessionListEntry {
-  id: string;
-  createdAt: string;
-  updatedAt: string;
-  status: 'active' | 'archived';
-  summary: SessionSummary;
-}
+export type { SessionListEntry, SessionSummary };
 
 export function sessionSummary(s: SessionState): SessionSummary {
   return {

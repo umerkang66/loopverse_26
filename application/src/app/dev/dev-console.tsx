@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { DEPARTMENT_LABEL, RESOURCE_LABEL } from '@/domain/constants';
 import { EVENT_PRESETS, INITIAL_POOL } from '@/domain/scenario';
 import { AGENT_IDS, DEPARTMENT_IDS, RESOURCE_KEYS, type CouncilMessage, type PublicState, type ResourceVector } from '@/domain/types';
-import type { StreamEvent } from '@/server/bus';
+import type { StreamEvent } from '@/domain/stream';
 
 type Toast = { id: number; level: string; text: string };
 type Forecast = {

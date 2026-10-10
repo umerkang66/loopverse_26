@@ -1,12 +1,7 @@
 import 'server-only';
-import type { AgentId, AgentStatus, CouncilMessage, Phase, PublicState } from '@/domain/types';
+import type { StreamEvent } from '@/domain/stream';
 
-export type StreamEvent =
-  | { type: 'state.updated'; state: PublicState }
-  | { type: 'message.created'; message: CouncilMessage }
-  | { type: 'agent.status'; agentId: AgentId; status: AgentStatus; phase: Phase }
-  | { type: 'toast'; level: 'info' | 'success' | 'warning' | 'error'; text: string }
-  | { type: 'session.reset'; sessionId: string };
+export type { StreamEvent };
 
 type Listener = (id: number, event: StreamEvent) => void;
 
