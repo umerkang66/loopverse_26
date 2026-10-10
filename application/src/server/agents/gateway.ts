@@ -53,6 +53,8 @@ export class AgentGateway {
   private forcedOffline: string | null = null;
   /** Phase 3 Resilience Lab hook. */
   fault: (agentId: AgentId, kind: AgentKind) => FaultDirective = () => null;
+  /** Resilience Lab: while true every LLM call is short-circuited with a simulated connection failure. */
+  outage: () => boolean = () => false;
 
   constructor(
     private readonly env: ServerEnv,
@@ -73,6 +75,7 @@ export class AgentGateway {
     const started = Date.now();
     if (this.env.mode === 'offline') return this.fallback(req, 'offline', started, 0, false);
     if (this.forcedOffline) return this.fallback(req, this.forcedOffline, started, 0, false);
+    if (this.outage()) return this.fallback(req, 'simulated OpenAI outage (APIConnectionError)', started, 0, true);
     if (this.circuitOpen()) return this.fallback(req, 'circuit-open', started, 0, false);
 
     let input = req.packet;
@@ -119,7 +122,8 @@ export class AgentGateway {
         const usage = result.runContext.usage;
         const latencyMs = Date.now() - started;
         this.hooks.onStats(req.agentId, { llm: true, latencyMs, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
-        if (this.consecutiveFailures >= 4) this.hooks.onNotice('success', 'LLM restored: agents are live again.');
+        if (this.consecutiveFailures >= 4 || this.circuitOpenUntil > 0) this.hooks.onNotice('success', 'LLM restored: agents are live again.');
+        this.circuitOpenUntil = 0;
         this.consecutiveFailures = 0;
         return {
           output,

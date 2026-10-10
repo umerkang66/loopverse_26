@@ -5,7 +5,7 @@
  *   npm run simulate -- --event=PRACTICE_SOLAR --bodies          (live agents; uses OPENAI_API_KEY from .env)
  *   npm run simulate -- --offline --event=official --json > run.json
  *
- * Flags: --offline · --event=<preset id>|official|none · --bodies · --json · --out=<file> · --db · --max-rounds=N
+ * Flags: --auto-countersign (simulated human for HITL) · --offline · --event=<preset id>|official|none · --bodies · --json · --out=<file> · --db · --max-rounds=N
  *        --resources=P,W,O,R,B · --keep (keep the temp data dir) · --timeout=<seconds>
  * Storage defaults to a temp file store, so simulations never touch your database; --db persists to Supabase under
  * instance sim-<timestamp>. Exits 1 if any applicable compliance item fails.
@@ -141,9 +141,22 @@ async function main() {
     }
   });
 
+  /** HITL: a plan with risk above the threshold waits for a human. `--auto-countersign` stands in for that human (labeled simulated). */
+  const settleHuman = async () => {
+    const sc = rt.latestScenario();
+    if (!sc || sc.status !== 'AWAITING_COUNTERSIGN') return;
+    if (flags.has('auto-countersign')) {
+      await rt.countersign('COUNTERSIGN', 'HUMAN (simulated): auto-countersigned by simulate.ts --auto-countersign');
+      say('   ✍ HUMAN (simulated) countersigned the plan');
+    } else {
+      say(`   ✍ ${sc.id} is awaiting a human countersign (pass --auto-countersign to simulate one)`);
+    }
+  };
+
   const started = Date.now();
   await rt.start({ ...(resources ? { resources } : {}), ...(maxRounds ? { maxRounds } : {}) });
   await rt.waitForIdle(timeoutMs);
+  await settleHuman();
   const baselineMs = Date.now() - started;
 
   let eventMs = 0;
@@ -153,6 +166,7 @@ async function main() {
     const t = Date.now();
     await rt.applyEvent(interpretation);
     await rt.waitForIdle(timeoutMs);
+    await settleHuman();
     eventMs = Date.now() - t;
   }
   if (rt.isRunning()) say(`\nTimed out after ${secs(timeoutMs)}; the negotiation is still running.`);

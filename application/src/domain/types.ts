@@ -178,7 +178,9 @@ export interface CouncilMessage {
 }
 
 // ── Events ──
-export type EventEffect =
+/** Who produced an effect: the deterministic parser, the Event Intake LLM, or the judge's manual edit. */
+export type EffectOrigin = 'parser' | 'llm' | 'judge';
+export type EventEffect = (
   | { type: 'RESOURCE_DELTA'; resource: ResourceKey; value: number }
   | { type: 'RESOURCE_PERCENT'; resource: ResourceKey; value: number }
   | { type: 'RESOURCE_SET'; resource: ResourceKey; value: number }
@@ -188,7 +190,7 @@ export type EventEffect =
   | { type: 'RISK_LIMIT'; value: number }
   | { type: 'MAX_SACRIFICES'; value: number }
   | { type: 'PRIORITY'; department: DepartmentId | null; note: string }
-  | { type: 'INFO'; note: string };
+  | { type: 'INFO'; note: string }) & { origin?: EffectOrigin };
 export type EventSource = 'DETERMINISTIC' | 'LLM' | 'HYBRID' | 'MANUAL' | 'PRESET';
 export interface EventInterpretation {
   title: string;

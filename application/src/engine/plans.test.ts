@@ -28,7 +28,7 @@ describe('plan versioning content', () => {
 });
 
 describe('commitment review after an event', () => {
-  it('carries affordable shares, marks priorities DUE, withdraws stale offers, voids unneeded shares', () => {
+  it('carries affordable shares, marks priorities DUE, withdraws stale offers, fulfils shares whose sacrifice ended', () => {
     const share = commitment({ id: 'C-1', owner: 'ENGINEERING', beneficiary: 'LIFE_SUPPORT', kind: 'RESOURCE_SHARE', resource: 'robot', amount: 4, status: 'ACTIVE', onlyIfSacrificeMode: 'L3', expiry: { unit: 'HOURS', value: 48, label: '48 hours' } });
     const priority = commitment({ id: 'C-2', owner: 'COMMANDER', beneficiary: 'LIFE_SUPPORT', kind: 'PRIORITY', status: 'ACTIVE' });
     const offer = commitment({ id: 'C-3', owner: 'FOOD', beneficiary: 'ENGINEERING', status: 'OFFERED' });
@@ -41,7 +41,7 @@ describe('commitment review after an event', () => {
     const water = { id: 'S1', index: 1, colonyHour: 6, pool: { ...BASE_POOL, oxygen: 57 }, reserveRequirements: {} };
     const pathAOnly = feasiblePlans(constraints({ oxygen: 57 }), BASE);
     const shareForE = commitment({ id: 'C-4', owner: 'COMMANDER', beneficiary: 'ENGINEERING', kind: 'RESERVE_ASSIGNMENT', resource: 'water', amount: 2, status: 'ACTIVE', onlyIfSacrificeMode: 'E3', expiry: { unit: 'HOURS', value: 48, label: '48 hours' } });
-    expect(reviewAfterEvent([shareForE], water, pathAOnly)[0]!.to).toBe('VOID');
+    expect(reviewAfterEvent([shareForE], water, pathAOnly)[0]!.to).toBe('FULFILLED');
   });
 
   it('expires by colony hours and by cycles', () => {

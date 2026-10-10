@@ -1,6 +1,7 @@
 import 'server-only';
 import os from 'node:os';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { InsightsResponse, SearchResponse } from '@/domain/api';
 import type { DbTable, SessionState, StorageStatus } from '@/domain/types';
 import type { ServerEnv } from '../env';
 import { newSessionId } from '../ids';
@@ -17,6 +18,7 @@ import {
 import { sessionRow } from '../db/mappers';
 import { getSupabaseAdmin } from '../db/supabase';
 import { SupabaseSync, type SyncNotice, type UpsertClient } from '../db/sync';
+import { insightsFromSessions, insightsRemote, searchRemote, searchSessions } from '../search';
 import { LocalSnapshot } from './local-snapshot';
 import type { SessionListEntry } from './summary';
 
@@ -196,6 +198,42 @@ export class Persistence {
       return s && s.instanceId === this.env.ARES_INSTANCE_ID ? s : null;
     }
     return this.snapshot.get(id);
+  }
+
+  private async localSessions(current: SessionState | null): Promise<SessionState[]> {
+    const out: SessionState[] = current ? [current] : [];
+    for (const entry of (await this.snapshot.list()).slice(0, 100)) {
+      if (entry.id === current?.id) continue;
+      const s = await this.snapshot.get(entry.id);
+      if (s) out.push(s);
+    }
+    return out;
+  }
+
+  /** Ranked full-text search across every session of this instance (Supabase), or the local archive in file mode. */
+  async search(query: string, limit: number, current: SessionState | null): Promise<SearchResponse> {
+    const currentId = current?.id ?? '';
+    if (this.sb && this.sync) {
+      await this.sync.flushNow(2000).catch(() => false);
+      try {
+        return { query, source: 'supabase', hits: await searchRemote(this.sb, this.env.ARES_INSTANCE_ID, query, limit, currentId, this.env.DB_TIMEOUT_MS) };
+      } catch (err) {
+        log.warn('database search failed; searching the local archive instead', err instanceof Error ? err.message : String(err));
+      }
+    }
+    return { query, source: 'local', hits: searchSessions(await this.localSessions(current), currentId, query, limit) };
+  }
+
+  async insights(current: SessionState | null): Promise<InsightsResponse> {
+    if (this.sb && this.sync) {
+      await this.sync.flushNow(2000).catch(() => false);
+      try {
+        return await insightsRemote(this.sb, this.env.ARES_INSTANCE_ID, this.env.DB_TIMEOUT_MS);
+      } catch (err) {
+        log.warn('database insights failed; computing from the local archive', err instanceof Error ? err.message : String(err));
+      }
+    }
+    return insightsFromSessions(await this.localSessions(current));
   }
 
   async hardReset(): Promise<void> {

@@ -57,10 +57,10 @@ describe('event intake', () => {
       event_name: 'Dust storm',
       impact: { solar_output_drop_pct: 25, relay_blackout_hours: 12, comms_blackout: true, food_capacity_percent: -40 },
     });
-    expect(e.effects).toEqual([{ type: 'RESOURCE_PERCENT', resource: 'power', value: -25 }]);
+    expect(e.effects.filter((x) => x.type.startsWith('RESOURCE_'))).toEqual([{ type: 'RESOURCE_PERCENT', resource: 'power', value: -25 }]);
     expect(e.warnings.join(' ')).toContain('relay_blackout_hours');
     expect(e.warnings.join(' ')).toContain('comms_blackout');
-    expect(e.warnings.join(' ')).toContain('food_capacity_percent');
+    expect(e.effects.some((x) => x.type === 'PRIORITY' && x.department === 'FOOD')).toBe(true);
     expect(e.confidence).toBeLessThan(1);
     expect(applyEffects(base, e.effects).pool.power).toBe(59);
   });

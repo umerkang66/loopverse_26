@@ -80,3 +80,36 @@ export interface HealthResponse {
   judgeCodeRequired: boolean;
   version: string;
 }
+
+// ── Cross-session search and insights ──
+export interface SearchHit {
+  sessionId: string;
+  seq: number;
+  messageId: string;
+  scenarioId: string;
+  round: number;
+  type: string;
+  subtype: string | null;
+  from: string;
+  planVersion: number | null;
+  createdAt: string;
+  /** Plain text with «…» markers around matches. Never HTML: render with React text nodes. */
+  headline: string;
+  rank: number;
+  isCurrentSession: boolean;
+}
+
+export interface SearchResponse {
+  query: string;
+  source: 'supabase' | 'local';
+  hits: SearchHit[];
+}
+
+export interface InsightsResponse {
+  sessions: number;
+  scenarios_by_outcome: Record<string, number>;
+  sacrifices_by_department: Record<string, number>;
+  refusals_by_department: Record<string, number>;
+  avg_rounds_to_approval: number | null;
+  avg_event_resolution_seconds: number | null;
+}

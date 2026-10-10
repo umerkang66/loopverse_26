@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, FileUp, Sparkles, Wand2, Zap } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AlertTriangle, FileUp, MessageSquareText, Sparkles, Wand2, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { RESOURCE_LABEL } from '@/domain/constants';
@@ -22,8 +22,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Pill } from '../bits';
 import { CertificateCard } from '../certificate-card';
+import { EffectsEditor } from './effects-editor';
 
-type TabId = 'presets' | 'json' | 'manual' | (string & {});
+type TabId = 'presets' | 'json' | 'text' | 'manual' | (string & {});
 
 interface IntakeTab {
   id: TabId;
@@ -55,10 +56,11 @@ function initialRequest(tab: TabId, preset: Preset): InterpretRequestBody | null
   return null;
 }
 
-/** Tab registry: Phase 3 adds "Describe in words" (LLM interpreter) here. */
+/** Tab registry. "Describe in words" goes through the hybrid Event Intake pipeline (parser first, then the LLM). */
 export const INTAKE_TABS: IntakeTab[] = [
   { id: 'presets', label: 'Practice presets', icon: <Zap className="size-3.5" />, render: (ctx) => <PresetsTab {...ctx} /> },
   { id: 'json', label: 'JSON', icon: <FileUp className="size-3.5" />, render: (ctx) => <JsonTab {...ctx} /> },
+  { id: 'text', label: 'Describe in words', icon: <MessageSquareText className="size-3.5" />, render: (ctx) => <TextTab {...ctx} /> },
   { id: 'manual', label: 'Quick manual', icon: <Wand2 className="size-3.5" />, render: (ctx) => <ManualTab {...ctx} /> },
 ];
 
@@ -106,6 +108,24 @@ function InjectBody() {
     setInputError(error);
     setPreview(null);
   };
+
+  // Editing effects re-runs the authoritative forecast (debounced) and records the edit as the judge's (source MANUAL).
+  const edits = useRef(0);
+  const editEffects = (effects: EventEffect[]) => {
+    if (!preview) return;
+    const it = { ...preview.interpretation, effects, source: 'MANUAL' as const };
+    setPreview({ interpretation: it, forecast: preview.forecast });
+    const mine = ++edits.current;
+    if (effects.length === 0) return;
+    setTimeout(() => {
+      if (mine !== edits.current) return;
+      api
+        .interpret({ kind: 'manual', title: it.title, effects })
+        .then((res) => mine === edits.current && setPreview((p) => (p ? { interpretation: p.interpretation, forecast: res.forecast } : p)))
+        .catch(() => undefined);
+    }, 400);
+  };
+  useEffect(() => () => void (edits.current = -1), []);
 
   const runPreview = async () => {
     if (!request) return;
@@ -159,11 +179,11 @@ function InjectBody() {
       {inputError && <p className="text-sm text-danger">{inputError}</p>}
       <div className="flex items-center gap-2">
         <Button variant="secondary" onClick={() => void runPreview()} disabled={!request || busy !== null}>
-          <Sparkles /> {busy === 'preview' ? 'Previewing…' : 'Preview impact'}
+          <Sparkles /> {busy === 'preview' ? (request?.kind === 'text' || request?.kind === 'json' ? 'Interpreting with Event Intake…' : 'Previewing…') : 'Preview impact'}
         </Button>
         <span className="text-xs text-muted-foreground">Nothing changes until you apply.</span>
       </div>
-      {preview && state && <EventPreview preview={preview} state={state} />}
+      {preview && state && <EventPreview preview={preview} state={state} onEdit={editEffects} />}
       {running && preview && (
         <p className="flex items-center gap-2 rounded-md border border-amber/40 bg-amber/10 px-3 py-2 text-sm text-amber">
           <AlertTriangle className="size-4" /> A negotiation is in progress ({sc?.id}, round {sc?.round}). Applying interrupts it — {sc?.id} is recorded as INTERRUPTED.
@@ -177,6 +197,42 @@ function InjectBody() {
           <Zap /> {busy === 'apply' ? 'Applying…' : running ? 'Interrupt & reconvene council' : 'Apply & reconvene council'}
         </Button>
       </DialogFooter>
+    </div>
+  );
+}
+
+const EXAMPLES = [
+  { id: 'U3', label: 'Airlock accident', text: 'Airlock accident: two more crew injured. Medical cannot drop to Sacrifice mode, and Mission Control orders 3 Oxygen units held in reserve.' },
+  { id: 'U4', label: 'Supply drone', text: 'A supply drone delivers 8 power cells and 5 units of water.' },
+  { id: 'U8', label: 'Rover drive train', text: 'Rover drive train destroyed; Engineering cannot run its Standard repair program.' },
+  { id: 'U9', label: 'Cascade failure', text: 'Cascade failure: power −6, oxygen −2, robot time −3.' },
+];
+
+function TextTab({ setRequest }: TabContext) {
+  const [text, setText] = useState('');
+  const change = (value: string) => {
+    setText(value);
+    setRequest(value.trim() ? { kind: 'text', input: value } : null);
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <Textarea
+        value={text}
+        onChange={(e) => change(e.target.value)}
+        className="h-32 text-sm"
+        maxLength={4000}
+        placeholder="Describe the crisis in plain English, e.g. “A micrometeorite punctured the water tank; we lost 6 units of water.”"
+        aria-label="Describe the event in words"
+      />
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        <span className="text-muted-foreground">Examples:</span>
+        {EXAMPLES.map((x) => (
+          <button key={x.id} type="button" onClick={() => change(x.text)} className="rounded-md border px-2 py-1 hover:bg-panel-2">
+            {x.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">The parser reads explicit numbers first; Event Intake (the Commander&apos;s staff officer) fills the gaps. You can edit every interpreted effect before applying.</p>
     </div>
   );
 }
@@ -398,7 +454,7 @@ function ManualTab({ setRequest }: TabContext) {
   );
 }
 
-function EventPreview({ preview, state }: { preview: InterpretResponse; state: PublicState }) {
+function EventPreview({ preview, state, onEdit }: { preview: InterpretResponse; state: PublicState; onEdit: (effects: EventEffect[]) => void }) {
   const { interpretation: it, forecast: f } = preview;
   const inForceVersion = state.planInForceVersion;
   return (
@@ -409,6 +465,11 @@ function EventPreview({ preview, state }: { preview: InterpretResponse; state: P
         <span className="num text-xs text-muted-foreground">confidence {(it.confidence * 100).toFixed(0)}%</span>
       </div>
       {it.summary && <p className="text-sm text-muted-foreground">{it.summary}</p>}
+      {it.confidence < 0.7 && (
+        <p className="flex items-center gap-2 rounded-md border border-amber/40 bg-amber/10 px-3 py-1.5 text-sm text-amber">
+          <AlertTriangle className="size-4" /> Please confirm the interpretation: confidence is below 70%. Edit the effects below if anything is off.
+        </p>
+      )}
       {it.warnings.length > 0 && (
         <ul className="text-xs text-amber">
           {it.warnings.map((w, i) => (
@@ -416,9 +477,21 @@ function EventPreview({ preview, state }: { preview: InterpretResponse; state: P
           ))}
         </ul>
       )}
+      {it.assumptions.length > 0 && (
+        <div className="flex flex-col gap-0.5 rounded-md border bg-panel px-3 py-1.5 text-xs">
+          <span className="panel-title">Assumptions</span>
+          {it.assumptions.map((a, i) => (
+            <span key={i}>• {a}</span>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-col gap-1">
+        <span className="panel-title">Interpreted effects (editable)</span>
+        <EffectsEditor effects={it.effects} onChange={onEdit} />
+      </div>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
         <div className="flex flex-col gap-1">
-          <span className="panel-title">Effects</span>
+          <span className="panel-title">Arithmetic</span>
           {f.effects.length === 0 && <span className="text-sm text-muted-foreground">No resource effect.</span>}
           {f.effects.map((e, i) => (
             <span key={i} className="num text-sm">

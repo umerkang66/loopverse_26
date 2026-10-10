@@ -1,0 +1,1 @@
+{"event_name":"Dust storm","description":"Regional dust storm reduces solar output by 25% and blacks out the Earth relay for 12 hours.","impact":{"solar_output_drop_pct":25,"relay_blackout_hours":12}}

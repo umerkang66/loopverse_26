@@ -105,6 +105,8 @@ export function reviewAfterEvent(
   commitments: readonly Commitment[],
   scenario: Pick<Scenario, 'id' | 'index' | 'colonyHour' | 'pool' | 'reserveRequirements'>,
   feasible: readonly RankedPlan[],
+  /** Pool of the scenario before the event: FUTURE_RESOURCE promises fall due when their resource increased. */
+  prevPool?: ResourceVector,
 ): ReviewItem[] {
   const items: ReviewItem[] = [];
   const cap = capOf(scenario.pool, scenario.reserveRequirements);
@@ -122,6 +124,19 @@ export function reviewAfterEvent(
     if (c.status !== 'ACTIVE') continue;
     if (expired) {
       items.push({ id: c.id, from: 'ACTIVE', to: 'EXPIRED', reason: `Expired (${c.expiry.label}).` });
+      continue;
+    }
+    if (c.kind === 'FUTURE_RESOURCE' && c.resource && prevPool) {
+      if (scenario.pool[c.resource] > prevPool[c.resource]) {
+        items.push({
+          id: c.id,
+          from: 'ACTIVE',
+          to: 'DUE',
+          reason: `${RESOURCE_LABEL[c.resource].name} increased (${prevPool[c.resource]} → ${scenario.pool[c.resource]}): owed to ${DEPARTMENT_LABEL[c.beneficiary]}: "${c.promise}".`,
+        });
+      } else {
+        items.push({ id: c.id, from: 'ACTIVE', to: 'ACTIVE', reason: `Carried: ${RESOURCE_LABEL[c.resource].name} did not increase, so nothing is owed yet.` });
+      }
       continue;
     }
     if (c.kind === 'PRIORITY' || c.kind === 'FUTURE_RESOURCE') {
@@ -145,8 +160,8 @@ export function reviewAfterEvent(
         items.push({
           id: c.id,
           from: 'ACTIVE',
-          to: 'VOID',
-          reason: `Not needed: no feasible plan asks ${DEPARTMENT_LABEL[c.beneficiary]} to run ${mode}.`,
+          to: 'FULFILLED',
+          reason: `Served: ${DEPARTMENT_LABEL[c.beneficiary]}'s sacrifice ended (no feasible plan asks it to run ${mode}), so the return was honoured.`,
         });
       } else {
         items.push({ id: c.id, from: 'ACTIVE', to: 'VOID', reason: 'Cost no longer affordable under the new pool; must be renegotiated.' });

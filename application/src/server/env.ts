@@ -32,7 +32,8 @@ const EnvSchema = z.object({
   MAX_ROUNDS_EVENT: int(5),
   DEADLINE_BASELINE_SECONDS: int(300),
   DEADLINE_EVENT_SECONDS: int(170),
-  HITL_ENABLED: z.string().optional().transform((v) => v?.trim().toLowerCase() === 'true'),
+  // On by default (bonus: human approval when risk > threshold). Set HITL_ENABLED=false to disable.
+  HITL_ENABLED: z.string().optional().transform((v) => v?.trim().toLowerCase() !== 'false'),
   HITL_RISK_THRESHOLD: int(20),
   DATA_DIR: z.string().optional().transform((v) => v?.trim() || './data'),
   JUDGE_ACCESS_CODE: optionalString,

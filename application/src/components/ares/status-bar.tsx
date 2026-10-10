@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { CircleHelp, Database, Radio, Settings, Timer } from 'lucide-react';
+import { CircleHelp, Database, Radio, Search, Settings, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { PublicState, Scenario } from '@/domain/types';
 import { useAres } from '@/client/store';
@@ -33,6 +33,7 @@ export function StatusBar({ archived = false }: { archived?: boolean }) {
           <StorageBadge state={state} />
           {!archived && <ConnectionDot />}
           {!archived && <ControlsMenu />}
+          <SearchButton />
           <SettingsButton />
           <HelpButton />
         </div>
@@ -90,12 +91,24 @@ function ScenarioSwitcher({ state }: { state: PublicState }) {
 function RunStatus({ state }: { state: PublicState }) {
   const sc = currentScenario(state);
   const status = runStatusLabel(state, sc);
+  const openDialog = useAres((s) => s.openDialog);
+  const readOnly = useAres((s) => s.readOnly);
+  const awaiting = status.label === 'AWAITING COUNTERSIGN' && !readOnly;
+  const plan = awaiting && sc?.approvedPlanVersion ? state.plans.find((p) => p.version === sc.approvedPlanVersion) : null;
   return (
     <span className="flex items-center gap-1.5">
-      <Pill tone={status.tone} className="text-xs">
-        {status.label === 'NEGOTIATING' && <span className="size-1.5 animate-pulse rounded-full bg-mars" />}
-        {status.label}
-      </Pill>
+      {awaiting ? (
+        <button type="button" onClick={() => openDialog('countersign')} className="animate-pulse rounded-[6px]" aria-label="Review the plan awaiting a human countersign">
+          <Pill tone="amber" className="text-xs">
+            Human countersign required{plan ? ` — plan v${plan.version} · risk ${plan.risk} > ${state.config.hitl.riskThreshold}` : ''}
+          </Pill>
+        </button>
+      ) : (
+        <Pill tone={status.tone} className="text-xs">
+          {status.label === 'NEGOTIATING' && <span className="size-1.5 animate-pulse rounded-full bg-mars" />}
+          {status.label}
+        </Pill>
+      )}
       {sc && sc.status !== 'PENDING' && (
         <span className="num text-xs text-muted-foreground">
           R{sc.round}/{sc.maxRounds}
@@ -207,6 +220,17 @@ function ConnectionDot() {
         <span className={cn('size-2 rounded-full', color)} />
         <span className="meta-secondary">{connection}</span>
       </span>
+    </Tip>
+  );
+}
+
+function SearchButton() {
+  const openDialog = useAres((s) => s.openDialog);
+  return (
+    <Tip content="Search all negotiations (Ctrl/Cmd+K)">
+      <Button variant="ghost" size="icon-sm" onClick={() => openDialog('search')} aria-label="Search all negotiations">
+        <Search />
+      </Button>
     </Tip>
   );
 }

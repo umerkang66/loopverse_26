@@ -18,7 +18,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { PanelTitle, Tip } from './bits';
 
-/** Phase 3 appends items here (e.g. the evidence pack). */
 export const EXPORT_ITEMS: { kind: ExportKind; label: string; hint: string }[] = [
   { kind: 'json', label: 'Session JSON', hint: 'Everything: scenarios, plans, votes, commitments, messages, agent state, compliance' },
   { kind: 'transcript', label: 'Transcript CSV', hint: 'One row per message (source column labels FALLBACK)' },
@@ -26,6 +25,7 @@ export const EXPORT_ITEMS: { kind: ExportKind; label: string; hint: string }[] =
   { kind: 'votes', label: 'Votes CSV', hint: 'Every ballot bound to its version and hash' },
   { kind: 'commitments', label: 'Commitments CSV', hint: 'The return-commitment ledger with history' },
   { kind: 'final', label: 'Final allocation (output_schema)', hint: 'final_allocation.json with one output_schema record per department' },
+  { kind: 'evidence', label: 'Evidence pack (.zip)', hint: 'Allocation, transcripts, opening + post-event logs, crisis log, compliance, manifest with SHA-256 and database row-count parity' },
 ];
 
 export interface ControlState {

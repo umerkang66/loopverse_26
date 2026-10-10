@@ -7,7 +7,7 @@ import type { StreamEvent } from '@/domain/stream';
 import type { ActorId, AgentId, CouncilMessage, MessageSource, MessageType, PublicState } from '@/domain/types';
 
 export type RightTab = 'board' | 'validation' | 'history' | 'feasibility' | 'compliance' | 'ledger' | 'analytics';
-export type DialogName = 'start' | 'inject' | 'reset' | 'settings' | 'help' | 'judgeCode';
+export type DialogName = 'start' | 'inject' | 'reset' | 'settings' | 'help' | 'judgeCode' | 'search' | 'countersign';
 export type Connection = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
 export interface Filters {
@@ -66,7 +66,7 @@ const initialUi = (): UiState => ({
   autoScroll: true,
   highlightMessageId: null,
   highlightNonce: 0,
-  dialogs: { start: false, inject: false, reset: false, settings: false, help: false, judgeCode: false },
+  dialogs: { start: false, inject: false, reset: false, settings: false, help: false, judgeCode: false, search: false, countersign: false },
   settingsFocus: null,
   injectPreset: null,
 });

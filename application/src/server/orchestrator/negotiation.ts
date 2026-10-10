@@ -11,6 +11,7 @@ import {
   type Vote,
 } from '@/domain/types';
 import { restrictedModeOf, selectionTotals } from '@/engine/catalog';
+import { settleAtApproval } from '@/engine/promises';
 import { canInvokeOverride, overridePolicy } from '@/engine/policy';
 import { failedChecks } from '@/engine/validator';
 import { tally } from '@/engine/votes';
@@ -496,6 +497,7 @@ export class NegotiationRunner {
         a.sacrificeLedger.push({ scenarioId: sc.id, modeId: plan.selections[dept], planVersion: plan.version, commitmentIds: plan.commitmentIds.filter((id) => this.s.commitments.find((c) => c.id === id)?.beneficiary === dept) });
       });
     }
+    this.settlePromises(sc, plan);
     mut.setPlanInForce(plan.version);
     const hitl = this.s.config.hitl.enabled && plan.risk > this.s.config.hitl.riskThreshold;
     mut.updateScenario(sc, {
@@ -528,6 +530,31 @@ export class NegotiationRunner {
     }
     mut.toast('success', `${sc.id}: plan v${plan.version} approved in round ${sc.round}`);
     return true;
+  }
+
+  /** DUE promises from earlier scenarios become FULFILLED or BREACHED against the plan that was just approved. */
+  private settlePromises(sc: Scenario, plan: Plan): void {
+    if (sc.index === 0) return;
+    const { mut } = this.deps;
+    const view = buildView(this.s, sc);
+    const feasibleAll = [...view.feasibleCurrent, ...(view.feasibleOverride ?? [])];
+    const earlier = sc.previousPlan ? this.s.plans.find((p) => p.version === sc.previousPlan!.version) : null;
+    const settlements = settleAtApproval(this.s.commitments, sc, plan, feasibleAll, earlier);
+    for (const st of settlements) {
+      const c = this.s.commitments.find((x) => x.id === st.id);
+      if (!c) continue;
+      mut.setCommitmentStatus(c, st.to, 'SYSTEM', st.reason);
+      mut.adjustTrust(st.beneficiary, st.owner, st.trustDelta, sc, `${c.id} ${st.to.toLowerCase()}: ${st.reason}`.slice(0, 200));
+    }
+    if (settlements.length) {
+      mut.system(
+        sc,
+        'PROMISE_SETTLEMENT',
+        `Promises settled: ${settlements.map((s) => `${s.id} ${s.to}`).join(' · ')}`,
+        settlements.map((s) => `${s.id}: ${s.to} — ${s.reason}${s.to === 'BREACHED' && !s.avoidable ? ' (no trust penalty)' : ''}`).join('\n'),
+        { settlements },
+      );
+    }
   }
 
   // ── outcomes ──

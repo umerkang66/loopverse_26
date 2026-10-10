@@ -1,9 +1,10 @@
 import 'server-only';
+import type { Model } from '@openai/agents';
 import OpenAI from 'openai';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import type { EventForecast } from '@/domain/api';
-import { EVENT_PRESETS, INITIAL_POOL, SCENARIO } from '@/domain/scenario';
+import type { EventForecast, InsightsResponse, SearchResponse } from '@/domain/api';
+import { EVENT_PRESETS, getMode, INITIAL_POOL, SCENARIO } from '@/domain/scenario';
 import {
   AGENT_IDS,
   MODE_IDS,
@@ -17,12 +18,15 @@ import {
   type Scenario,
   type SessionState,
 } from '@/domain/types';
+import { stampParser } from '@/engine/event-merge';
 import { applyEffects, describeEffect, parseEventInput } from '@/engine/events';
 import { feasiblePlans } from '@/engine/optimizer';
-import { basePolicy, overridePolicy, type ScenarioConstraints } from '@/engine/policy';
+import { basePolicy, constraintsOf, overridePolicy, type ScenarioConstraints } from '@/engine/policy';
 import { isValidPool } from '@/engine/resources';
 import { failedChecks, validatePlan } from '@/engine/validator';
 import { AgentFactory } from './agents/factory';
+import { EventIntake } from './agents/event-intake';
+import { DEFAULT_NOISE, FaultInjector, type FaultRequest, type FaultSnapshot } from './faults';
 import { AgentGateway } from './agents/gateway';
 import { initAgentsSdk } from './agents/sdk';
 import { AgentSessions } from './agents/sessions';
@@ -51,17 +55,18 @@ export class HttpError extends Error {
 
 export type { EventForecast };
 
+const Origin = z.enum(['parser', 'llm', 'judge']).optional();
 const EffectSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('RESOURCE_DELTA'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(-999).max(999) }),
-  z.object({ type: z.literal('RESOURCE_PERCENT'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(-100).max(500) }),
-  z.object({ type: z.literal('RESOURCE_SET'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(0).max(999) }),
-  z.object({ type: z.literal('RESERVE_REQUIREMENT'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(0).max(999) }),
-  z.object({ type: z.literal('FORBID_MODE'), modeId: z.enum(MODE_IDS), reason: z.string().max(300) }),
-  z.object({ type: z.literal('ALLOW_MODE'), modeId: z.enum(MODE_IDS) }),
-  z.object({ type: z.literal('RISK_LIMIT'), value: z.number().int().min(4).max(60) }),
-  z.object({ type: z.literal('MAX_SACRIFICES'), value: z.number().int().min(0).max(4) }),
-  z.object({ type: z.literal('PRIORITY'), department: z.enum(DEPARTMENT_IDS).nullable(), note: z.string().max(400) }),
-  z.object({ type: z.literal('INFO'), note: z.string().max(400) }),
+  z.object({ origin: Origin, type: z.literal('RESOURCE_DELTA'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(-999).max(999) }),
+  z.object({ origin: Origin, type: z.literal('RESOURCE_PERCENT'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(-100).max(500) }),
+  z.object({ origin: Origin, type: z.literal('RESOURCE_SET'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(0).max(999) }),
+  z.object({ origin: Origin, type: z.literal('RESERVE_REQUIREMENT'), resource: z.enum(RESOURCE_KEYS), value: z.number().min(0).max(999) }),
+  z.object({ origin: Origin, type: z.literal('FORBID_MODE'), modeId: z.enum(MODE_IDS), reason: z.string().max(300) }),
+  z.object({ origin: Origin, type: z.literal('ALLOW_MODE'), modeId: z.enum(MODE_IDS) }),
+  z.object({ origin: Origin, type: z.literal('RISK_LIMIT'), value: z.number().int().min(4).max(60) }),
+  z.object({ origin: Origin, type: z.literal('MAX_SACRIFICES'), value: z.number().int().min(0).max(4) }),
+  z.object({ origin: Origin, type: z.literal('PRIORITY'), department: z.enum(DEPARTMENT_IDS).nullable(), note: z.string().max(400) }),
+  z.object({ origin: Origin, type: z.literal('INFO'), note: z.string().max(400) }),
 ]);
 
 export const InterpretationSchema = z.object({
@@ -96,6 +101,8 @@ export interface RuntimeOptions {
   env?: Partial<ServerEnv>;
   supabaseClient?: SupabaseClient | null;
   source?: Record<string, string | undefined>;
+  /** Tests inject a ScriptedModel for the Event Intake officer. */
+  intakeModel?: Model;
 }
 
 /** The single in-process engine: state, persistence, agents, protocol, and the event stream. */
@@ -106,6 +113,8 @@ export class AresRuntime {
   readonly mut: Mutations;
   readonly gateway: AgentGateway;
   readonly runner: NegotiationRunner;
+  readonly intake: EventIntake;
+  readonly faults = new FaultInjector();
   private readonly sessions = new AgentSessions();
   private state: SessionState | null = null;
   private readonly readyPromise: Promise<void>;
@@ -126,6 +135,7 @@ export class AresRuntime {
       now: () => new Date().toISOString(),
       publicState: () => this.getPublicState(),
     });
+    this.persistence.sync?.setFaultCheck(() => this.faults.dbOutageActive());
     const factory = new AgentFactory(this.env);
     this.gateway = new AgentGateway(this.env, factory, this.sessions, {
       sessionId: () => this.mustState().id,
@@ -141,6 +151,9 @@ export class AresRuntime {
         }),
       onNotice: (level, text) => this.notice(level, text),
     });
+    this.gateway.outage = () => this.faults.llmOutageActive();
+    this.gateway.fault = (agentId) => this.faults.directive(agentId);
+    this.intake = new EventIntake(this.env, options.intakeModel, () => this.gateway.mode === 'offline' || this.gateway.circuitOpen());
     this.runner = new NegotiationRunner({
       state: () => this.mustState(),
       mut: this.mut,
@@ -200,6 +213,8 @@ export class AresRuntime {
   private onStorageNotice(level: 'info' | 'warning' | 'error' | 'success', text: string): void {
     if (!this.state) return;
     this.mut.toast(level, text);
+    const sc = this.latestScenario();
+    if (sc && level !== 'info' && /^Database/.test(text)) this.mut.system(sc, 'DB_NOTICE', text);
     this.mut.schedulePublish();
   }
 
@@ -292,7 +307,7 @@ export class AresRuntime {
     if (request.kind === 'preset') {
       const preset = EVENT_PRESETS.find((p) => p.id === request.presetId);
       if (!preset) throw new HttpError(400, `Unknown preset ${request.presetId}`);
-      interpretation = parseEventInput(preset.payload, { source: 'PRESET' });
+      interpretation = stampParser(parseEventInput(preset.payload, { source: 'PRESET' }));
     } else if (request.kind === 'json') {
       let payload = request.input;
       if (typeof payload === 'string') {
@@ -303,12 +318,13 @@ export class AresRuntime {
         }
       }
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new HttpError(400, 'The event JSON must be an object.');
-      interpretation = parseEventInput(payload);
+      interpretation = await this.intake.interpret(payload, parseEventInput(payload), this.intakeContext());
     } else if (request.kind === 'text') {
       if (typeof request.input !== 'string' || !request.input.trim()) throw new HttpError(400, 'Describe the event in words.');
-      interpretation = parseEventInput(request.input.slice(0, 4000));
+      const text = request.input.slice(0, 4000);
+      interpretation = await this.intake.interpret(text, parseEventInput(text), this.intakeContext());
     } else {
-      const effects = (request.effects ?? []) as EventEffect[];
+      const effects = ((request.effects ?? []) as EventEffect[]).map((e) => ({ ...e, origin: e.origin ?? ('judge' as const) }));
       if (effects.length === 0) throw new HttpError(400, 'Add at least one effect.');
       interpretation = {
         title: request.title?.trim() || 'Manual adjustment',
@@ -326,6 +342,11 @@ export class AresRuntime {
       };
     }
     return { interpretation, forecast: this.forecast(interpretation) };
+  }
+
+  private intakeContext() {
+    const prev = this.latestScenario();
+    return { pool: prev?.pool ?? { ...INITIAL_POOL }, reserveRequirements: prev?.reserveRequirements ?? {}, riskCap: prev?.riskCap ?? null };
   }
 
   private forecast(interpretation: EventInterpretation): EventForecast {
@@ -394,6 +415,11 @@ export class AresRuntime {
       const prev = this.latestScenario();
       if (!prev) throw new HttpError(409, 'Start the crisis before injecting an event.');
       await this.interruptCurrent(`New event "${interpretation.title}" arrived`);
+      if (prev.status === 'AWAITING_COUNTERSIGN') {
+        // The event supersedes a plan nobody countersigned: it is marked STALE/INVALID by the event review below.
+        this.mut.updateScenario(prev, { status: 'RESOLVED', outcomeReason: `${prev.outcomeReason ?? 'Approved'}; superseded by "${interpretation.title}" before countersign` });
+        this.mut.system(prev, 'COUNTERSIGN_SUPERSEDED', `Pending countersign of ${prev.id} withdrawn: a new event arrived`);
+      }
       const applied = applyEffects(prev, interpretation.effects);
       const eventId = this.mut.nextEventId();
       const index = prev.index + 1;
@@ -512,6 +538,124 @@ export class AresRuntime {
     });
   }
 
+  // ── Resilience Lab ──
+  faultStatus(): FaultSnapshot {
+    return this.faults.snapshot();
+  }
+
+  /** Inject a fault. Always announced in the transcript as SYSTEM/FAULT_INJECTED (source HUMAN). */
+  async injectFault(fault: FaultRequest): Promise<{ announced: string; faults: FaultSnapshot }> {
+    await this.ready();
+    const sc = this.latestScenario();
+    if (!sc) throw new HttpError(409, 'Start the crisis before injecting a fault.');
+    const announce = (text: string, data: Record<string, unknown> = {}) => {
+      this.mut.system(sc, 'FAULT_INJECTED', `Fault injected by judge: ${text}`, text, { fault, ...data }, 'JUDGE');
+      return text;
+    };
+    const live = this.env.mode === 'live';
+    let announced: string;
+    switch (fault.kind) {
+      case 'OUTAGE': {
+        announced = announce(`OpenAI outage for ${fault.durationSec} s${live ? '' : ' (agents are already rule-based in OFFLINE mode, so nothing changes)'}`);
+        this.faults.startLlmOutage(fault.durationSec);
+        const timer = setTimeout(() => {
+          const latest = this.latestScenario();
+          if (latest) this.mut.system(latest, 'FAULT_ENDED', 'Simulated OpenAI outage window ended; the next LLM call probes the circuit breaker.');
+        }, fault.durationSec * 1000);
+        timer.unref?.();
+        break;
+      }
+      case 'CORRUPT_NEXT_OUTPUT':
+        announced = announce(`${fault.agentId}'s next model output will be corrupted (invalid JSON); expect a repair retry${live ? '' : ' (OFFLINE mode has no model output to corrupt)'}`);
+        if (live) this.faults.armCorrupt(fault.agentId);
+        break;
+      case 'DROP_NEXT_MESSAGE':
+        announced = announce(`${fault.agentId}'s next message will be dropped in transit and treated as a timeout${live ? '' : ' (OFFLINE mode sends no network messages)'}`);
+        if (live) this.faults.armDrop(fault.agentId);
+        break;
+      case 'NOISE': {
+        const text = fault.text?.trim() || DEFAULT_NOISE;
+        announced = announce('unverified relay noise injected; agents must ignore it');
+        this.mut.post({
+          scenarioId: sc.id,
+          round: sc.round,
+          phase: this.mustState().run.phase,
+          from: 'SYSTEM',
+          to: 'ALL',
+          type: 'SYSTEM',
+          subtype: 'RELAY_NOISE',
+          summary: '≋ UNVERIFIED RELAY NOISE ≋ no authority, no state change',
+          body: text,
+          source: 'HUMAN',
+        });
+        break;
+      }
+      case 'BYPASS_ATTEMPT': {
+        const plans = this.mustState().plans.filter((p) => p.scenarioId === sc.id);
+        const draft = plans[plans.length - 1];
+        if (!draft || sc.status !== 'NEGOTIATING') throw new HttpError(409, 'A bypass attempt needs a draft plan in an active negotiation.');
+        announced = announce(`Commander bypass attempt: approving draft v${draft.version} directly`);
+        const blocked = this.runner.approve(sc, draft, 'Bypass attempt: approval requested without the required votes.', {
+          turnId: this.mut.nextTurnId(),
+          source: 'DETERMINISTIC',
+          meta: { model: 'fault-injection', latencyMs: 0, attempts: 1, toolCalls: [] },
+        });
+        if (blocked) announce(`the draft already satisfied the gate (PASS + 4/4 ACCEPT), so approving it was legitimate`);
+        break;
+      }
+      case 'TAMPER_PACKAGE': {
+        const published = getMode(fault.modeId);
+        const plans = this.mustState().plans.filter((p) => p.scenarioId === sc.id);
+        const draft = plans[plans.length - 1];
+        const claimedPower = Math.max(0, published.resources.power - 2);
+        announced = announce(`package tampering: a counteroffer claims ${fault.modeId} Power ${claimedPower} instead of the published ${published.resources.power}`);
+        const report = validatePlan({
+          selections: draft?.selections ?? { LIFE_SUPPORT: 'L2', MEDICAL: 'M2', FOOD: 'F2', ENGINEERING: 'E2' },
+          claimedPackages: { [fault.modeId]: { resources: { ...published.resources, power: claimedPower }, risk: published.risk } },
+          scenario: { ...constraintsOf(sc), policy: sc.policy, colonyHour: sc.colonyHour, index: sc.index },
+          includedCommitments: [],
+          stage: 'DRY_RUN',
+          now: new Date().toISOString(),
+        });
+        const integrity = report.checks.find((c) => c.id === 'PACKAGE_INTEGRITY');
+        this.mut.post({
+          scenarioId: sc.id,
+          round: sc.round,
+          phase: this.mustState().run.phase,
+          from: 'VALIDATOR',
+          type: 'VALIDATION',
+          subtype: 'FAIL',
+          summary: `PACKAGE_INTEGRITY ${integrity?.status}: ${integrity?.reason ?? ''}`.slice(0, 400),
+          body: report.checks.map((c) => `${c.status === 'PASS' ? '✓' : c.status === 'FAIL' ? '✗' : '–'} ${c.id}: ${c.reason}`).join('\n'),
+          data: { report, tamper: true },
+          source: 'DETERMINISTIC',
+        });
+        break;
+      }
+      case 'DB_OUTAGE': {
+        if (this.persistence.driver !== 'supabase') {
+          throw new HttpError(409, 'The database outage drill needs Supabase storage (this run uses the local file store, which has no remote to lose).');
+        }
+        announced = announce(`database outage for ${fault.durationSec} s: writes are buffered locally; negotiation continues`);
+        this.faults.startDbOutage(fault.durationSec);
+        const timer = setTimeout(() => void this.persistence.flushNow(10_000), fault.durationSec * 1000 + 250);
+        timer.unref?.();
+        break;
+      }
+    }
+    this.mut.publishNow();
+    return { announced, faults: this.faults.snapshot() };
+  }
+
+  /** Settings → human countersign switch (applies to the current session; the env default seeds new sessions). */
+  setHitl(enabled: boolean): { enabled: boolean } {
+    const s = this.mustState();
+    s.config = { ...s.config, hitl: { ...s.config.hitl, enabled } };
+    this.persistence.markAllDirty();
+    this.mut.publishNow();
+    return { enabled };
+  }
+
   private async interruptCurrent(reason: string, markScenario = true): Promise<void> {
     const current = this.current;
     if (!current) return;
@@ -564,6 +708,18 @@ export class AresRuntime {
     const s = await this.persistence.getSession(id);
     if (!s) throw new HttpError(404, 'Session not found');
     return s;
+  }
+
+  async search(query: string, limit = 50): Promise<SearchResponse> {
+    await this.ready();
+    const q = query.trim().slice(0, 200);
+    if (!q) throw new HttpError(400, 'Enter a search term.');
+    return this.persistence.search(q, Math.min(200, Math.max(1, Math.round(limit))), this.state);
+  }
+
+  async insights(): Promise<InsightsResponse> {
+    await this.ready();
+    return this.persistence.insights(this.state);
   }
 
   // ── health ──

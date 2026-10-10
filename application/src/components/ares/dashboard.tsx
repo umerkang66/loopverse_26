@@ -19,8 +19,10 @@ import { RightPanel } from './right-panel';
 import { StatusBar } from './status-bar';
 import { Transcript } from './transcript/transcript';
 import { AgentMindSheet } from './agent-mind-sheet';
+import { CountersignDialog } from './dialogs/countersign-dialog';
 import { InjectEventDialog } from './dialogs/inject-event-dialog';
 import { SettingsSheet } from './dialogs/settings-sheet';
+import { SearchDialog } from './dialogs/search-dialog';
 import { HelpDialog, JudgeCodeDialog, ResetDialog, StartDialog } from './dialogs/simple-dialogs';
 
 /** The live Mission Control dashboard at `/`. */
@@ -133,10 +135,12 @@ function Shell({ archived = false, reconnect, debug = false }: { archived?: bool
       <AgentMindSheet />
       <SettingsSheet />
       <HelpDialog />
+      <SearchDialog />
       {!archived && (
         <>
           <StartDialog />
           <InjectEventDialog />
+          <CountersignDialog />
           <ResetDialog />
           <JudgeCodeDialog />
         </>
@@ -234,6 +238,11 @@ function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        api.getState().openDialog('search');
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
       if (document.querySelector('[role="dialog"]')) return;

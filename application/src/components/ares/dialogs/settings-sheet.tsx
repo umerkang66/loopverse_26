@@ -16,9 +16,9 @@ import { Label } from '@/components/ui/label';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Switch } from '@/components/ui/switch';
 import { Pill } from '../bits';
+import { ResilienceLab } from './resilience-lab';
 
-/** Phase 3 appends sections here (Resilience Lab, search). */
-export const SETTINGS_SECTIONS: { id: string; render: () => ReactNode }[] = [];
+export const SETTINGS_SECTIONS: { id: string; render: () => ReactNode }[] = [{ id: 'resilience', render: () => <ResilienceLab /> }];
 
 export function SettingsSheet() {
   const open = useAres((s) => s.ui.dialogs.settings);

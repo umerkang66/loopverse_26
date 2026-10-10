@@ -1,0 +1,1 @@
+Cascade failure: power −6, oxygen −2, robot time −3.

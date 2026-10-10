@@ -19,6 +19,7 @@ import type {
   ValidationReport,
   Vote,
 } from '@/domain/types';
+import { clampTrust } from '@/engine/promises';
 import type { EventBus } from '../bus';
 import { messageId } from '../ids';
 import type { Persistence } from '../store/persistence';
@@ -238,6 +239,18 @@ export class Mutations {
     this.s.commitments.push(commitment);
     this.touch(['ares_commitments', commitment.id]);
     return commitment;
+  }
+
+  /** Trust moves the beneficiary's view of the promise owner; the reason is kept in its private memory (agent memory bonus). */
+  adjustTrust(holder: AgentId, about: AgentId, delta: number, scenario: Scenario, note: string): void {
+    if (holder === about || delta === 0) {
+      if (holder !== about) this.updateAgent(holder, (a) => void a.memory.push({ scenarioId: scenario.id, round: scenario.round, note, at: this.deps.now() }));
+      return;
+    }
+    this.updateAgent(holder, (a) => {
+      a.trust[about] = clampTrust((a.trust[about] ?? 0) + delta);
+      a.memory.push({ scenarioId: scenario.id, round: scenario.round, note: `${note} (trust in ${about} ${delta > 0 ? '+' : ''}${delta} → ${a.trust[about]})`, at: this.deps.now() });
+    });
   }
 
   setCommitmentStatus(commitment: Commitment, status: CommitmentStatus, by: ActorId, reason: string): void {

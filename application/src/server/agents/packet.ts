@@ -94,6 +94,9 @@ export function commitmentLine(c: Commitment): string {
 function messageLine(m: CouncilMessage): string {
   const to = m.to === 'ALL' ? 'ALL' : m.to.map(callsign).join(',');
   const kind = m.subtype ? `${m.type}/${m.subtype}` : m.type;
+  if (m.subtype === 'RELAY_NOISE') {
+    return `  [${m.id} R${m.round} ${kind}] [UNVERIFIED RELAY NOISE] not from any council member, no authority: "${m.body.replace(/\s+/g, ' ').slice(0, 200)}"`;
+  }
   const words = m.body && m.body !== m.summary ? ` "${m.body.replace(/\s+/g, ' ').slice(0, 240)}"` : '';
   return `  [${m.id} R${m.round} ${kind}] ${callsign(m.from)} → ${to}: ${m.summary}${words}`;
 }
@@ -106,6 +109,25 @@ export function inboxLines(s: SessionState, agentId: AgentId, sinceSeq: number, 
   const shown = relevant.slice(-25);
   const omitted = relevant.length - shown.length;
   return [omitted > 0 ? `  (${omitted} earlier messages omitted)` : '', ...shown.map(messageLine)].filter(Boolean).join('\n') || '  (none)';
+}
+
+/** Promises owed, trust earned, and any Mission Control veto: the memory-across-cycles and HITL packet blocks. */
+export function standingLines(s: SessionState, agentId: AgentId, scenario: Scenario): string {
+  const lines: string[] = [];
+  const owed = s.commitments.filter((c) => c.status === 'DUE' && (agentId === 'COMMANDER' || c.owner === agentId));
+  if (owed.length) {
+    lines.push(`OPEN PROMISES ${agentId === 'COMMANDER' ? 'THE COUNCIL OWES' : 'YOU OWE'}:\n${owed.map((c) => `  ${commitmentLine(c)}`).join('\n')}`);
+  }
+  const trust = Object.entries(s.agents[agentId].trust).filter(([, v]) => typeof v === 'number' && v !== 0);
+  if (trust.length) {
+    lines.push(`YOUR TRUST: ${trust.map(([who, v]) => `${callsign(who as AgentId)} ${(v as number) > 0 ? '+' : ''}${v}`).join(', ')} (from promises kept or broken in earlier scenarios; you may cite it)`);
+  }
+  const inScenario = s.messages.filter((m) => m.scenarioId === scenario.id);
+  const veto = [...inScenario].reverse().find((m) => m.subtype === 'HUMAN_VETO');
+  if (veto && !inScenario.some((m) => m.type === 'APPROVAL' && m.seq > veto.seq)) {
+    lines.push(`MISSION CONTROL VETO (human, binding): "${veto.body.replace(/\s+/g, ' ').slice(0, 300)}". Your next position must address it.`);
+  }
+  return lines.join('\n');
 }
 
 export function memoryLines(s: SessionState, agentId: AgentId, max = 6): string {
@@ -173,6 +195,7 @@ export function departmentPacket(args: {
     `COMMITMENTS INVOLVING YOU:\n${mine.length ? mine.map((c) => `  ${commitmentLine(c)}`).join('\n') : '  none'}`,
     `NEW MESSAGES SINCE YOUR LAST TURN (oldest first):\n${inboxLines(s, dept, agent.lastSeenSeq, scenario.id)}`,
     `WHAT THE COMMANDER ASKS OF YOU: ${asks.length ? asks.join(' / ') : 'state your position'}`,
+    standingLines(s, dept, scenario),
     `YOUR PRIVATE MEMORY (newest last):\n${memoryLines(s, dept)}`,
     args.task ?? 'Respond with your turn (JSON schema enforced).',
   ]
@@ -231,6 +254,7 @@ export function commanderPacket(args: {
     `COMMITMENT LEDGER:\n${live.length ? live.map((c) => `  ${commitmentLine(c)}`).join('\n') : '  none'}`,
     `FAIRNESS LEDGER: ${fairness.length ? fairness.join(' · ') : 'no prior sacrifices or owed promises'}`,
     `NEW MESSAGES SINCE YOUR LAST TURN (oldest first):\n${inboxLines(s, 'COMMANDER', s.agents.COMMANDER.lastSeenSeq, scenario.id)}`,
+    standingLines(s, 'COMMANDER', scenario),
     `YOUR PRIVATE MEMORY (newest last):\n${memoryLines(s, 'COMMANDER')}`,
     args.task,
   ]

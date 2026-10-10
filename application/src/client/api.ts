@@ -3,8 +3,10 @@
 import { toast } from 'sonner';
 import type {
   HealthResponse,
+  InsightsResponse,
   InterpretRequestBody,
   InterpretResponse,
+  SearchResponse,
   SessionResponse,
   SessionsResponse,
   StateResponse,
@@ -81,15 +83,28 @@ export const api = {
   resume: () => post<{ scenarioId: string }>('/api/control/resume'),
   reset: (body: { hard?: boolean; confirm?: string } = {}) => post<{ sessionId: string }>('/api/control/reset', body),
   countersign: (decision: 'COUNTERSIGN' | 'VETO', reason = '') => post<{ scenarioId: string }>('/api/control/countersign', { decision, reason }),
+  faults: (body: Record<string, unknown>) => post<{ announced: string; faults: FaultStatus }>('/api/control/faults', body),
+  faultStatus: () => request<FaultStatus>('/api/control/faults', { quiet: true }),
+  setHitl: (enabled: boolean) => post<{ enabled: boolean }>('/api/control/config', { hitlEnabled: enabled }),
+  search: (q: string, limit = 50) => request<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  insights: () => request<InsightsResponse>('/api/insights', { quiet: true }),
   interpret: (body: InterpretRequestBody) => post<InterpretResponse>('/api/events/interpret', body),
   apply: (interpretation: EventInterpretation) => post<{ scenarioId: string; eventId: string }>('/api/events/apply', { interpretation }),
   sessions: () => request<SessionsResponse>('/api/sessions'),
   session: (id: string) => request<SessionResponse>(`/api/sessions/${encodeURIComponent(id)}`),
 };
 
-export type ExportKind = 'json' | 'transcript' | 'plans' | 'votes' | 'commitments' | 'final';
+export interface FaultStatus {
+  llmOutageUntil: string | null;
+  dbOutageUntil: string | null;
+  armedCorrupt: string[];
+  armedDrop: string[];
+}
+
+export type ExportKind = 'json' | 'transcript' | 'plans' | 'votes' | 'commitments' | 'final' | 'evidence';
 
 export function exportUrl(kind: ExportKind, opts: { sessionId?: string | null; scenarioId?: string | null } = {}): string {
+  if (kind === 'evidence') return `/api/export/evidence${opts.sessionId ? `?sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`;
   const q = new URLSearchParams();
   if (kind === 'json' || kind === 'final') q.set('format', kind);
   else {

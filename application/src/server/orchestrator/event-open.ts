@@ -1,6 +1,7 @@
 import 'server-only';
 import type { Scenario } from '@/domain/types';
 import { reviewAfterEvent } from '@/engine/commitments';
+import { TRUST_FULFILLED } from '@/engine/promises';
 import { constraintsOf } from '@/engine/policy';
 import { failedChecks, validatePlan } from '@/engine/validator';
 import type { RunnerDeps } from './deps';
@@ -41,11 +42,15 @@ export function openEventScenario(deps: RunnerDeps, scenario: Scenario): 'OK' | 
   // Step 3 · review commitments
   const view = buildView(s, scenario);
   const feasibleAll = [...view.feasibleCurrent, ...(view.feasibleOverride ?? [])];
-  const items = reviewAfterEvent(s.commitments, scenario, feasibleAll);
+  const items = reviewAfterEvent(s.commitments, scenario, feasibleAll, s.scenarios[scenario.index - 1]?.pool);
   for (const item of items) {
     if (item.from === item.to) continue;
     const c = s.commitments.find((x) => x.id === item.id);
-    if (c) deps.mut.setCommitmentStatus(c, item.to, 'SYSTEM', item.reason);
+    if (!c) continue;
+    deps.mut.setCommitmentStatus(c, item.to, 'SYSTEM', item.reason);
+    if (item.to === 'FULFILLED' && c.owner !== c.beneficiary) {
+      deps.mut.adjustTrust(c.beneficiary, c.owner, TRUST_FULFILLED, scenario, `${c.id} kept: ${c.promise}`.slice(0, 160));
+    }
   }
   const changed = items.filter((i) => i.from !== i.to);
   const counts = changed.reduce<Record<string, number>>((acc, i) => ({ ...acc, [i.to]: (acc[i.to] ?? 0) + 1 }), {});

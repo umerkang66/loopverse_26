@@ -168,6 +168,8 @@ export class SupabaseSync {
   }
 
   private async flushOnce(): Promise<void> {
+    const rowsBefore = this.pending();
+    const startedAt = Date.now();
     try {
       if (this.faultCheck()) throw new DbError(classifyDbError({ message: 'TypeError: fetch failed (simulated database outage)' }));
       // 1) static rows first (archived sessions etc.), then dirty rows in FK order
@@ -186,7 +188,7 @@ export class SupabaseSync {
           for (const [key, gen] of snapshot) if (keys.get(key) === gen) keys.delete(key);
         }
       }
-      this.onSuccess();
+      this.onSuccess(rowsBefore, Date.now() - startedAt);
     } catch (err) {
       this.onFailure(err);
     }
@@ -216,14 +218,14 @@ export class SupabaseSync {
     throw new DbError(classified, table);
   }
 
-  private onSuccess(): void {
+  private onSuccess(rowsSynced = 0, elapsedMs = 0): void {
     const recovered = this.status.state === 'DEGRADED' || this.status.state === 'ERROR';
     this.backoffIndex = 0;
     this.retryAt = 0;
     this.status.lastSyncAt = new Date().toISOString();
     this.status.lastError = null;
     this.status.state = this.pending() === 0 ? 'SYNCED' : 'SYNCING';
-    if (recovered) this.opts.onNotice?.({ level: 'success', text: 'Database restored — buffered rows synced to Supabase.' });
+    if (recovered) this.opts.onNotice?.({ level: 'success', text: `Database restored — ${rowsSynced} rows synced in ${(elapsedMs / 1000).toFixed(1)} s` });
     if (this.pending() > 0) this.schedule(this.opts.flushMs);
   }
 

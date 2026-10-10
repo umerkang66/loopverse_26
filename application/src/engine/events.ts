@@ -2,6 +2,7 @@
 // Never guesses a magnitude: anything it cannot read becomes a warning (Phase 3 adds an LLM interpreter on top).
 import { DEPARTMENT_LABEL, RESOURCE_LABEL } from '@/domain/constants';
 import { isModeId } from '@/domain/scenario';
+import { modeOf } from './catalog';
 import {
   DEPARTMENT_IDS,
   RESOURCE_KEYS,
@@ -10,6 +11,7 @@ import {
   type EventInterpretation,
   type EventSource,
   type ModeId,
+  type ModeTier,
   type ResourceKey,
   type ResourceVector,
 } from '@/domain/types';
@@ -58,12 +60,17 @@ function parseNumber(value: unknown): { value: number; percent: boolean } | null
 interface ParseCtx {
   effects: EventEffect[];
   warnings: string[];
+  assumptions: string[];
   understood: Set<ResourceKey>;
 }
 
+/** Container keys that only group other keys; they never name a resource themselves. */
+const GENERIC_KEYS = new Set(['impact', 'impacts', 'resources', 'resource', 'effects', 'effect', 'pool', 'details', 'data', 'event', 'consequences']);
+const FOOD_WORDS = new Set(['food', 'crop', 'crops', 'harvest', 'hydroponic', 'hydroponics', 'greenhouse', 'yield', 'farm']);
+
 /** Interpret one key/value pair. Returns true if understood. */
-function readEntry(key: string, value: unknown, ctx: ParseCtx): boolean {
-  const lower = key.toLowerCase();
+function readEntry(key: string, value: unknown, ctx: ParseCtx, leaf = key): boolean {
+  const lower = leaf.toLowerCase();
   if (META_KEYS.has(lower)) return true;
   const toks = tokens(key);
 
@@ -104,7 +111,16 @@ function readEntry(key: string, value: unknown, ctx: ParseCtx): boolean {
 
   // Resource keys
   const resource = resourceIn(toks);
-  if (!resource) return false;
+  if (!resource) {
+    // Human-impact keys about food production are not a pool resource: surface them as a priority + note.
+    if (toks.some((t) => FOOD_WORDS.has(t)) && value !== null && typeof value !== 'object') {
+      const note = `${key} = ${String(value)}`;
+      ctx.effects.push({ type: 'PRIORITY', department: 'FOOD', note });
+      ctx.effects.push({ type: 'INFO', note: `Food production impact (${note}); not a pool resource, so no units were changed` });
+      return true;
+    }
+    return false;
+  }
   if (typeof value === 'boolean' || value === null || typeof value === 'object') {
     ctx.warnings.push(`"${key}" mentions ${RESOURCE_LABEL[resource].name} but has no magnitude; not applied`);
     return false;
@@ -123,7 +139,9 @@ function readEntry(key: string, value: unknown, ctx: ParseCtx): boolean {
   const durationOnly = toks.includes('hours') && !hasNeg && !hasPos && !signed;
   if (durationOnly) {
     ctx.warnings.push(`"${key}" looks like a duration, not a resource change; not applied`);
-    return false;
+    ctx.effects.push({ type: 'INFO', note: `${key} = ${String(value)} (duration only, no magnitude for ${RESOURCE_LABEL[resource].name})` });
+    ctx.assumptions.push(`${key} gives a duration without a magnitude, so ${RESOURCE_LABEL[resource].name} was not changed.`);
+    return true;
   }
   if (!hasNeg && !hasPos && !signed && !isSet && !percent && !bare) {
     ctx.warnings.push(`"${key}" mentions ${RESOURCE_LABEL[resource].name} without a direction or unit; not applied`);
@@ -157,12 +175,69 @@ function readChangeArray(items: unknown[], ctx: ParseCtx): void {
   }
 }
 
-const TEXT_PATTERN =
-  /\b(power|energy|solar|water|oxygen|o2|air|robot(?:\s+time)?|robots|rover|bandwidth|comms|relay)\b[^.;]{0,60}?\b(drops?|decreases?|falls?|reduced?|reduces|loses?|lost|cut|increases?|rises?|gains?|grows?)\b[^.;]{0,20}?\bby\s+(\d+(?:\.\d+)?)\s*(%|percent|units?)?/gi;
-const HALVED_PATTERN = /\b(power|energy|solar|water|oxygen|o2|air|robot(?:\s+time)?|rover|bandwidth|comms|relay)\b[^.;]{0,40}?\bhalved\b/gi;
+const RES_WORDS = 'power|energy|solar|electricity|water|h2o|oxygen|o2|air|robot(?:ic)?s?|rovers?|drones?|bandwidth|comms|relay|uplink|telemetry';
+const TEXT_PATTERN = new RegExp(
+  `\\b(${RES_WORDS})\\b[^.;]{0,60}?\\b(drops?|decreases?|falls?|reduced?|reduces|loses?|lost|cut|increases?|rises?|gains?|grows?)\\b[^.;]{0,20}?\\bby\\s+(\\d+(?:\\.\\d+)?)\\s*(%|percent|units?)?`,
+  'gi',
+);
+const HALVED_PATTERN = new RegExp(`\\b(${RES_WORDS})\\b[^.;]{0,40}?\\bhalved\\b`, 'gi');
+const SIGNED_PATTERN = new RegExp(`\\b(${RES_WORDS})\\b(?:\\s+time)?\\s*[:=]?\\s*([+-])\\s*(\\d+(?:\\.\\d+)?)\\s*(%|percent)?`, 'gi');
+const RESERVE_PATTERNS = [
+  new RegExp(`(\\d+)\\s+(?:units?\\s+of\\s+)?(${RES_WORDS})(?:\\s+units?)?\\s+(?:to\\s+be\\s+)?(?:held|kept|set\\s+aside)?\\s*in\\s+reserve`, 'gi'),
+  new RegExp(`\\b(?:hold|keep|reserve)\\s+(\\d+)\\s+(?:units?\\s+of\\s+)?(${RES_WORDS})`, 'gi'),
+];
+const RISK_PATTERN = /\brisk\b[^.;]{0,50}?\b(?:not\s+exceed|no\s+(?:more|higher)\s+than|at\s+most|below|capped\s+at|cap\s+of|limit(?:ed)?\s+to|under)\s+(\d+)/gi;
+const GAIN_PATTERN = new RegExp(`(\\d+(?:\\.\\d+)?)\\s+(?:units?\\s+of\\s+)?(${RES_WORDS})\\b`, 'gi');
+const GAIN_CONTEXT = /\b(deliver\w*|arriv\w*|receiv\w*|resuppl\w*|restor\w*|adds?|added|brings?|brought|gains?|donat\w*|supplies|supplied)\b/i;
+const LOSS_CONTEXT = /\b(lose|loses|lost|destroy\w*|burn\w*|leak\w*|vent\w*|drain\w*|burst|damag\w*|spoil\w*)\b/i;
+const CANNOT = /\b(?:cannot|can\s?not|can't|unable\s+to|may\s+not|must\s+not|no\s+longer\s+able\s+to|not\s+able\s+to)\b/i;
+const DEPT_ALIASES: [DepartmentId, RegExp][] = [
+  ['LIFE_SUPPORT', /\b(?:life\s*support|haven)\b/i],
+  ['MEDICAL', /\b(?:medical|meridian)\b/i],
+  ['FOOD', /\b(?:food(?:\s+production)?|verdant)\b/i],
+  ['ENGINEERING', /\b(?:engineering|forge)\b/i],
+];
+const TIER_WORDS: [ModeTier, RegExp][] = [
+  ['STANDARD', /\bstandard\b/i],
+  ['RESTRICTED', /\brestricted\b/i],
+  ['SACRIFICE', /\bsacrifice\b/i],
+];
 
-function readText(text: string, ctx: ParseCtx, fromDescription: boolean): void {
-  for (const m of text.matchAll(TEXT_PATTERN)) {
+function blank(text: string, m: RegExpMatchArray): string {
+  const at = m.index ?? 0;
+  return text.slice(0, at) + ' '.repeat(m[0].length) + text.slice(at + m[0].length);
+}
+
+function readText(raw: string, ctx: ParseCtx, fromDescription: boolean): void {
+  let text = raw.replace(/[−–]/g, '-');
+  const note = (resource: ResourceKey) => {
+    if (fromDescription) ctx.warnings.push(`${RESOURCE_LABEL[resource].name} change read from the description text`);
+  };
+
+  // Mission Control mandates first, so their numbers are not mistaken for resource changes.
+  for (const pattern of RESERVE_PATTERNS) {
+    for (const m of [...text.matchAll(pattern)]) {
+      const resource = resourceIn(tokens(m[2]!));
+      if (!resource) continue;
+      ctx.effects.push({ type: 'RESERVE_REQUIREMENT', resource, value: Math.round(Number(m[1])) });
+      text = blank(text, m);
+    }
+  }
+  for (const m of [...text.matchAll(RISK_PATTERN)]) {
+    ctx.effects.push({ type: 'RISK_LIMIT', value: Math.round(Number(m[1])) });
+    text = blank(text, m);
+  }
+  for (const clause of text.split(/[.;]|,\s+and\s/)) {
+    const cannot = CANNOT.exec(clause);
+    if (!cannot) continue;
+    const before = clause.slice(0, cannot.index);
+    const after = clause.slice(cannot.index);
+    const dept = DEPT_ALIASES.find(([, re]) => re.test(before))?.[0];
+    const tier = TIER_WORDS.find(([, re]) => re.test(after))?.[0];
+    if (dept && tier) ctx.effects.push({ type: 'FORBID_MODE', modeId: modeOf(dept, tier), reason: `"${clause.trim().slice(0, 120)}"` });
+  }
+
+  for (const m of [...text.matchAll(TEXT_PATTERN)]) {
     const resource = resourceIn(tokens(m[1]!));
     if (!resource || ctx.understood.has(resource)) continue;
     const magnitude = Number(m[3]);
@@ -171,13 +246,39 @@ function readText(text: string, ctx: ParseCtx, fromDescription: boolean): void {
     if (m[4] && /%|percent/i.test(m[4])) ctx.effects.push({ type: 'RESOURCE_PERCENT', resource, value });
     else ctx.effects.push({ type: 'RESOURCE_DELTA', resource, value: Math.round(value) });
     ctx.understood.add(resource);
-    if (fromDescription) ctx.warnings.push(`${RESOURCE_LABEL[resource].name} change read from the description text`);
+    note(resource);
+    text = blank(text, m);
   }
-  for (const m of text.matchAll(HALVED_PATTERN)) {
+  for (const m of [...text.matchAll(HALVED_PATTERN)]) {
     const resource = resourceIn(tokens(m[1]!));
     if (!resource || ctx.understood.has(resource)) continue;
     ctx.effects.push({ type: 'RESOURCE_PERCENT', resource, value: -50 });
     ctx.understood.add(resource);
+    text = blank(text, m);
+  }
+  for (const m of [...text.matchAll(SIGNED_PATTERN)]) {
+    const resource = resourceIn(tokens(m[1]!));
+    if (!resource || ctx.understood.has(resource)) continue;
+    const value = (m[2] === '-' ? -1 : 1) * Number(m[3]);
+    if (m[4]) ctx.effects.push({ type: 'RESOURCE_PERCENT', resource, value });
+    else ctx.effects.push({ type: 'RESOURCE_DELTA', resource, value: Math.round(value) });
+    ctx.understood.add(resource);
+    note(resource);
+    text = blank(text, m);
+  }
+  // "delivers 8 power cells and 5 units of water": only when the sentence says supply arrived (or was lost).
+  for (const sentence of text.split(/[.;]/)) {
+    const gain = GAIN_CONTEXT.test(sentence);
+    const loss = !gain && LOSS_CONTEXT.test(sentence);
+    if (!gain && !loss) continue;
+    for (const m of sentence.matchAll(GAIN_PATTERN)) {
+      const resource = resourceIn(tokens(m[2]!));
+      if (!resource || ctx.understood.has(resource)) continue;
+      const value = Math.round(Number(m[1]));
+      ctx.effects.push({ type: 'RESOURCE_DELTA', resource, value: loss ? -value : value });
+      ctx.understood.add(resource);
+      note(resource);
+    }
   }
 }
 
@@ -196,7 +297,7 @@ export interface ParseOptions {
 
 /** Parse the official JSON format, any other JSON object, or a plain-text description. */
 export function parseEventInput(input: unknown, options: ParseOptions = {}): EventInterpretation {
-  const ctx: ParseCtx = { effects: [], warnings: [], understood: new Set() };
+  const ctx: ParseCtx = { effects: [], warnings: [], assumptions: [], understood: new Set() };
   const source: EventSource = options.source ?? 'DETERMINISTIC';
 
   if (typeof input === 'string') {
@@ -215,7 +316,7 @@ export function parseEventInput(input: unknown, options: ParseOptions = {}): Eve
       source,
       confidence: ctx.effects.length ? 0.7 : 0.3,
       warnings: ctx.warnings,
-      assumptions: [],
+      assumptions: ctx.assumptions,
       raw: input,
     };
   }
@@ -224,15 +325,23 @@ export function parseEventInput(input: unknown, options: ParseOptions = {}): Eve
   const impact = obj.impact && typeof obj.impact === 'object' && !Array.isArray(obj.impact) ? (obj.impact as Record<string, unknown>) : {};
   const unread: string[] = [];
 
-  for (const scope of [obj, impact]) {
+  if (Array.isArray(input)) readChangeArray(input, ctx);
+  const walk = (scope: Record<string, unknown>, prefix: string[], depth: number): void => {
     for (const [key, value] of Object.entries(scope)) {
-      if ((key === 'changes' || key === 'effects') && Array.isArray(value)) {
+      const lower = key.toLowerCase();
+      if (Array.isArray(value) && value.some((v) => v && typeof v === 'object')) {
         readChangeArray(value, ctx);
         continue;
       }
-      if (!readEntry(key, value, ctx) && !ctx.warnings.some((w) => w.includes(`"${key}"`))) unread.push(key);
+      if (value && typeof value === 'object' && !Array.isArray(value) && depth < 4) {
+        walk(value as Record<string, unknown>, GENERIC_KEYS.has(lower) ? prefix : [...prefix, key], depth + 1);
+        continue;
+      }
+      const joined = [...prefix, key].join('_');
+      if (!readEntry(joined, value, ctx, key) && !ctx.warnings.some((w) => w.includes(`"${joined}"`))) unread.push(joined);
     }
-  }
+  };
+  walk(obj, [], 0);
   for (const key of unread) ctx.warnings.push(`Unrecognized key "${key}"; not applied`);
 
   const description = typeof obj.description === 'string' ? obj.description : '';
@@ -260,7 +369,7 @@ export function parseEventInput(input: unknown, options: ParseOptions = {}): Eve
     source,
     confidence: ctx.warnings.length === 0 ? 1 : Math.max(0.4, 1 - 0.15 * ctx.warnings.length),
     warnings: ctx.warnings,
-    assumptions: [],
+    assumptions: ctx.assumptions,
     raw: input,
   };
 }

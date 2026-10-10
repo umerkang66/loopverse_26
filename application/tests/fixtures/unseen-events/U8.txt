@@ -1,0 +1,1 @@
+Rover drive train destroyed; Engineering cannot run its Standard repair program.

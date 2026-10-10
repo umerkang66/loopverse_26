@@ -1,3 +1,4 @@
+import type { Model } from '@openai/agents';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -6,9 +7,10 @@ import type { ServerEnv } from '@/server/env';
 import { EVENT_PRESETS } from '@/domain/scenario';
 import type { SessionState } from '@/domain/types';
 
-export async function offlineRuntime(env: Partial<ServerEnv> = {}): Promise<{ rt: AresRuntime; dir: string; cleanup: () => Promise<void> }> {
+export async function offlineRuntime(env: Partial<ServerEnv> = {}, intakeModel?: Model): Promise<{ rt: AresRuntime; dir: string; cleanup: () => Promise<void> }> {
   const dir = mkdtempSync(path.join(tmpdir(), 'ares-test-'));
   const rt = new AresRuntime({
+    intakeModel,
     source: {},
     env: { mode: 'offline', storageDriver: 'file', STORAGE_DRIVER: 'file', DATA_DIR: dir, ARES_INSTANCE_ID: 'test', ...env },
   });

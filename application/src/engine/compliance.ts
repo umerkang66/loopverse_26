@@ -50,7 +50,7 @@ function baselineItems(s: SessionState): ComplianceItem[] {
     ];
   }
   const msgs = s.messages.filter((m) => m.scenarioId === S0.id);
-  const resolved = S0.status === 'RESOLVED';
+  const resolved = S0.status === 'RESOLVED' || S0.status === 'AWAITING_COUNTERSIGN';
   const approval = approvalMessage(s, S0);
   const plan = approvedPlanOf(s, S0);
   const report = plan ? finalReport(plan) : undefined;
@@ -173,7 +173,7 @@ function eventItems(s: SessionState): ComplianceItem[] {
     return Object.entries(labels).map(([id, label]) => item(id, label, 'EVENT', 'PENDING', 'Inject an event to evaluate.'));
   }
   const msgs = s.messages.filter((m) => m.scenarioId === sc.id);
-  const resolved = sc.status === 'RESOLVED';
+  const resolved = sc.status === 'RESOLVED' || sc.status === 'AWAITING_COUNTERSIGN';
   const record = s.events.find((e) => e.id === sc.eventId);
   const eventMsg = msgs.find((m) => m.type === 'EVENT');
   const marked = msgs.find((m) => m.type === 'SYSTEM' && (m.subtype === 'PLAN_STALE' || m.subtype === 'PLAN_INVALID'));
@@ -267,7 +267,7 @@ function systemItems(s: SessionState): ComplianceItem[] {
       `Max rounds ${s.config.maxRoundsBaseline} (baseline) / ${s.config.maxRoundsEvent} (event); deadlines ${s.config.baselineDeadlineSec}s / ${s.config.eventDeadlineSec}s; agent turn timeout ${Math.round(s.config.agentTurnTimeoutMs / 1000)}s`,
     ),
   );
-  const resolved = s.scenarios.filter((sc) => sc.status === 'RESOLVED');
+  const resolved = s.scenarios.filter((sc) => sc.status === 'RESOLVED' || sc.status === 'AWAITING_COUNTERSIGN');
   items.push(
     item(
       'CLEAR_RESULT',
@@ -277,6 +277,29 @@ function systemItems(s: SessionState): ComplianceItem[] {
       resolved.length ? resolved.map((sc) => `${sc.id} ${sc.outcome}`).join(' · ') : 'No scenario resolved yet',
     ),
   );
+  const hitl = s.config.hitl;
+  const high = s.scenarios.filter((sc) => sc.approvedPlanVersion && (s.plans.find((p) => p.version === sc.approvedPlanVersion)?.risk ?? 0) > hitl.riskThreshold);
+  if (!hitl.enabled) {
+    items.push(item('HITL', 'Human countersign for approved plans above the risk threshold', 'SYSTEM', 'NA', 'Human-in-the-loop is disabled'));
+  } else if (high.length === 0) {
+    items.push(item('HITL', 'Human countersign for approved plans above the risk threshold', 'SYSTEM', resolved.length ? 'PASS' : 'PENDING', `No approved plan exceeds risk ${hitl.riskThreshold} yet`));
+  } else {
+    // A plan an event already marked STALE/INVALID before anyone countersigned is no longer the plan in force.
+    const live = high.filter((sc) => ['APPROVED', 'RATIFIED'].includes(s.plans.find((p) => p.version === sc.approvedPlanVersion)?.status ?? ''));
+    const unsigned = live.filter((sc) => s.plans.find((p) => p.version === sc.approvedPlanVersion)?.status !== 'RATIFIED');
+    items.push(
+      item(
+        'HITL',
+        'Human countersign for approved plans above the risk threshold',
+        'SYSTEM',
+        unsigned.length === 0 ? 'PASS' : unsigned.some((sc) => sc.status !== 'AWAITING_COUNTERSIGN') ? 'FAIL' : 'PENDING',
+        unsigned.length === 0
+          ? `${live.length} plan(s) above risk ${hitl.riskThreshold} in force, all countersigned by Mission Control${high.length > live.length ? ` (${high.length - live.length} superseded by a later event)` : ''}`
+          : `Awaiting countersign: ${unsigned.map((sc) => `${sc.id} v${sc.approvedPlanVersion}`).join(', ')}`,
+        s.messages.filter((m) => m.subtype === 'HUMAN_COUNTERSIGN').map((m) => m.id),
+      ),
+    );
+  }
   return items;
 }
 
