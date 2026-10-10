@@ -1,8 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { KeyRound, Play, RotateCcw } from 'lucide-react';
+import Link from 'next/link';
+import { Compass, KeyRound, Play, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
+import { startTour } from '../judge-tour';
 import { api, getJudgeCode, setJudgeCode } from '@/client/api';
 import { useAres } from '@/client/store';
 import { PROTOCOL_STEPS } from '@/client/selectors';
@@ -166,6 +168,34 @@ export function HelpDialog() {
             <div className="flex flex-col gap-1">
               <h3 className="panel-title">Keyboard</h3>
               <p className="num text-xs text-muted-foreground">S start · E inject event · X export menu · / search transcript · F follow live · ? help</p>
+            </div>
+            <div className="flex flex-col gap-2 pt-2 border-t">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    openDialog('help', false);
+                    startTour();
+                  }}
+                  className="gap-1.5"
+                >
+                  <Compass className="size-3.5" /> Take the tour
+                </Button>
+                <Link
+                  href="/architecture"
+                  className="inline-flex items-center gap-1 text-xs text-info hover:underline rounded border bg-panel-2 px-2.5 py-1.5"
+                  onClick={() => openDialog('help', false)}
+                >
+                  Architecture Diagram →
+                </Link>
+                <Link
+                  href="/health"
+                  className="inline-flex items-center gap-1 text-xs text-info hover:underline rounded border bg-panel-2 px-2.5 py-1.5"
+                  onClick={() => openDialog('help', false)}
+                >
+                  System Health →
+                </Link>
+              </div>
             </div>
           </section>
         </div>

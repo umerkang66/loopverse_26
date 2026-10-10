@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { Check, Database, ExternalLink, ShieldAlert, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { HealthResponse } from '@/domain/api';
@@ -62,10 +63,17 @@ function SettingsBody() {
         <Row k="Max rounds" v={`baseline ${c.maxRoundsBaseline} · event ${c.maxRoundsEvent}`} />
         <Row k="Deadlines" v={`baseline ${c.baselineDeadlineSec}s · event ${c.eventDeadlineSec}s`} />
         <Row k="Timeouts" v={`model call ${c.modelCallTimeoutMs} ms · agent turn ${c.agentTurnTimeoutMs} ms`} />
-        <Row k="Human countersign" v={c.hitl.enabled ? `on (risk > ${c.hitl.riskThreshold})` : 'off'} />
-        <a href="/api/health" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 pt-1 text-xs text-info hover:underline">
-          /api/health <ExternalLink className="size-3" />
-        </a>
+        <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
+          <Link href="/health" className="inline-flex items-center gap-1 text-info hover:underline" onClick={() => openDialog('settings', false)}>
+            System Health (/health)
+          </Link>
+          <Link href="/architecture" className="inline-flex items-center gap-1 text-info hover:underline" onClick={() => openDialog('settings', false)}>
+            Architecture Diagram (/architecture)
+          </Link>
+          <a href="/api/health?deep=1" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-muted-foreground hover:underline">
+            API JSON <ExternalLink className="size-3" />
+          </a>
+        </div>
       </section>
 
       <section className="flex flex-col gap-2 rounded-lg border bg-panel-2 p-3">

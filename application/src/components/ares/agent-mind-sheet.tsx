@@ -86,17 +86,26 @@ function Mind({ id, state, messages }: { id: AgentId; state: PublicState; messag
             {agent.stance?.conditions.length ? <p className="text-xs text-amber">Conditions: {agent.stance.conditions.join('; ')}</p> : null}
             {votes.length > 0 && <LastVote vote={votes[votes.length - 1]!} />}
             {Object.keys(agent.trust).length > 0 && (
-              <div className="flex flex-col gap-1">
-                <span className="text-xs text-muted-foreground">Trust toward others</span>
-                {AGENT_IDS.filter((o) => o !== id && agent.trust[o] !== undefined).map((o) => (
-                  <div key={o} className="grid grid-cols-[80px_1fr_30px] items-center gap-2 text-xs">
-                    <span style={{ color: ACTOR_META[o].color }}>{ACTOR_META[o].callsign}</span>
-                    <div className="h-1.5 rounded-full bg-panel">
-                      <div className="h-1.5 rounded-full" style={{ width: `${Math.max(0, Math.min(100, (agent.trust[o] ?? 0) * 100))}%`, backgroundColor: ACTOR_META[o].color }} />
+              <div className="flex flex-col gap-1.5 pt-1">
+                <span className="text-xs font-medium text-muted-foreground">Trust toward other council members (memory across rounds)</span>
+                {AGENT_IDS.filter((o) => o !== id && agent.trust[o] !== undefined).map((o) => {
+                  const val = agent.trust[o] ?? 0;
+                  const isPositive = val > 0;
+                  const isNegative = val < 0;
+                  return (
+                    <div key={o} className="flex items-center justify-between rounded border bg-panel px-2.5 py-1 text-xs">
+                      <span className="font-semibold" style={{ color: ACTOR_META[o].color }}>{ACTOR_META[o].callsign}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`num font-mono font-medium ${isPositive ? 'text-success' : isNegative ? 'text-danger' : 'text-muted-foreground'}`}>
+                          {isPositive ? `+${val.toFixed(2)}` : val.toFixed(2)}
+                        </span>
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${isPositive ? 'bg-success/15 text-success' : isNegative ? 'bg-danger/15 text-danger' : 'bg-muted text-muted-foreground'}`}>
+                          {isPositive ? 'Kept promise' : isNegative ? 'Breached promise' : 'Neutral'}
+                        </span>
+                      </div>
                     </div>
-                    <span className="num text-right">{(agent.trust[o] ?? 0).toFixed(2)}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>

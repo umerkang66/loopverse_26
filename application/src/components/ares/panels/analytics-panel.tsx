@@ -1,9 +1,11 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
+import type { InsightsResponse } from '@/domain/api';
 import { AGENT_IDS, DEPARTMENT_IDS, MESSAGE_TYPES, type CouncilMessage, type PublicState } from '@/domain/types';
 import { TIER_RANK, tierOf } from '@/engine/catalog';
+import { api } from '@/client/api';
 import { useAres } from '@/client/store';
 import { ACTOR_META, MESSAGE_TYPE_META } from '@/client/theme';
 import { Empty } from '../bits';
@@ -61,6 +63,7 @@ export function AnalyticsPanel() {
   const maxType = Math.max(1, ...byType.map((x) => x.n));
   return (
     <div className="flex flex-col gap-4">
+      <InsightsCard />
       <section className="flex flex-col gap-1">
         <h3 className="panel-title">Concessions — requested tier per round</h3>
         <div className="h-48 w-full">
@@ -136,5 +139,52 @@ export function AnalyticsPanel() {
         </div>
       </section>
     </div>
+  );
+}
+
+function InsightsCard() {
+  const [insights, setInsights] = useState<InsightsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .insights()
+      .then((data) => {
+        if (active) {
+          setInsights(data);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (loading || !insights || insights.sessions === 0) return null;
+
+  const sacrifices = Object.entries(insights.sacrifices_by_department)
+    .filter(([, n]) => n > 0)
+    .map(([dept, n]) => `${ACTOR_META[dept as keyof typeof ACTOR_META]?.callsign ?? dept} sacrificed ${n}×`);
+
+  const totalRefusals = Object.values(insights.refusals_by_department).reduce((a, b) => a + b, 0);
+
+  return (
+    <section className="flex flex-col gap-1.5 rounded-lg border border-info/40 bg-info/5 p-3 text-xs">
+      <div className="flex items-center justify-between">
+        <h3 className="panel-title text-info">Cross-session history insights</h3>
+        <span className="num text-muted-foreground">{insights.sessions} session{insights.sessions === 1 ? '' : 's'}</span>
+      </div>
+      <p className="text-foreground leading-relaxed">
+        Across <span className="num font-semibold">{insights.sessions}</span> sessions:{' '}
+        {sacrifices.length ? sacrifices.join(', ') : 'no sacrifices recorded'} ·{' '}
+        <span className="num font-semibold">{totalRefusals}</span> refusal{totalRefusals === 1 ? '' : 's'}
+        {insights.avg_rounds_to_approval !== null ? ` · ${insights.avg_rounds_to_approval} rounds to approval on average` : ''}
+        {insights.avg_event_resolution_seconds !== null ? ` · events resolved in ${insights.avg_event_resolution_seconds} s on average` : ''}.
+      </p>
+    </section>
   );
 }

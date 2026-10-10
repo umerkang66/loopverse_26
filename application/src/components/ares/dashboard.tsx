@@ -24,6 +24,7 @@ import { InjectEventDialog } from './dialogs/inject-event-dialog';
 import { SettingsSheet } from './dialogs/settings-sheet';
 import { SearchDialog } from './dialogs/search-dialog';
 import { HelpDialog, JudgeCodeDialog, ResetDialog, StartDialog } from './dialogs/simple-dialogs';
+import { JudgeTour } from './judge-tour';
 
 /** The live Mission Control dashboard at `/`. */
 export function LiveDashboard({ debug = false }: { debug?: boolean }) {
@@ -136,6 +137,7 @@ function Shell({ archived = false, reconnect, debug = false }: { archived?: bool
       <SettingsSheet />
       <HelpDialog />
       <SearchDialog />
+      <JudgeTour />
       {!archived && (
         <>
           <StartDialog />

@@ -341,6 +341,8 @@ export function VoteBody({ m }: { m: CouncilMessage }) {
 export function ApprovalBody({ m }: { m: CouncilMessage }) {
   const data = d<{ version?: number; hash?: string; finalValidation?: ValidationReport; votes?: Vote[] }>(m);
   const sc = useScenario(m.scenarioId);
+  const plan = useAres((s) => s.state?.plans.find((p) => p.version === data.version));
+  const isCountersigned = plan?.status === 'RATIFIED';
   const took = sc?.startedAt ? Date.parse(m.createdAt) - Date.parse(sc.startedAt) : null;
   const passed = data.finalValidation?.checks.filter((c) => c.status === 'PASS').length ?? 0;
   const applicable = data.finalValidation?.checks.filter((c) => c.status !== 'SKIP').length ?? 0;
@@ -351,6 +353,11 @@ export function ApprovalBody({ m }: { m: CouncilMessage }) {
         <span className="text-base font-semibold tracking-wide text-success">PLAN v{data.version} APPROVED</span>
         <span className="num text-xs text-muted-foreground">{hash8(data.hash)}</span>
         {took !== null && <Pill tone="success">in {mmss(took)}</Pill>}
+        {isCountersigned && (
+          <span className="ml-auto inline-flex items-center gap-1 rounded bg-info/15 px-2 py-0.5 text-xs font-medium text-info border border-info/30">
+            ✍ countersigned by Mission Control
+          </span>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <Verdict status="PASS" label={<span className="num font-normal">{passed}/{applicable} checks</span>} />
@@ -432,6 +439,42 @@ export function EventBody({ m }: { m: CouncilMessage }) {
           </tbody>
         </table>
       )}
+      {ev?.interpretation.effects && ev.interpretation.effects.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-muted-foreground">Interpreted effects (with provenance)</span>
+          <div className="flex flex-wrap gap-1.5">
+            {ev.interpretation.effects.map((e, i) => {
+              const badgeTone =
+                e.origin === 'llm'
+                  ? 'border-violet-500/40 bg-violet-500/15 text-violet-300'
+                  : e.origin === 'judge'
+                    ? 'border-blue-500/40 bg-blue-500/15 text-blue-300'
+                    : 'border-border bg-panel-2 text-muted-foreground';
+              return (
+                <div key={i} className="flex items-center gap-1.5 rounded border border-border/60 bg-panel-2 px-2 py-0.5 text-xs">
+                  <span className={cn('rounded px-1 text-[10px] font-mono border', badgeTone)}>{e.origin ?? 'parser'}</span>
+                  <span className="font-medium text-foreground">{e.type}</span>
+                  {e.resource && (
+                    <span className="num text-muted-foreground">
+                      {e.resource} {e.value !== undefined && e.value !== null ? (e.value > 0 ? `+${e.value}` : String(e.value)) : ''}
+                    </span>
+                  )}
+                  {e.modeId && <span className="num text-amber">{e.modeId}</span>}
+                  {e.note && <span className="text-[11px] text-muted-foreground italic">({e.note.slice(0, 45)})</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {ev?.raw !== undefined && ev?.raw !== null && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Raw crisis input</summary>
+          <pre className="mt-1 max-h-40 overflow-auto rounded bg-panel-2 p-2 font-mono text-[11px] text-muted-foreground whitespace-pre-wrap">
+            {typeof ev.raw === 'string' ? ev.raw : JSON.stringify(ev.raw, null, 2)}
+          </pre>
+        </details>
+      )}
       {data.notes && data.notes.length > 0 && <p className="text-xs text-muted-foreground">{data.notes.join(' · ')}</p>}
       {data.requiresReplan === false && <p className="text-xs text-muted-foreground">requires_replan: false — the council still reconvenes for at least two visible rounds.</p>}
     </div>
@@ -443,16 +486,29 @@ export function SystemBody({ m }: { m: CouncilMessage }) {
   if (m.subtype === 'COMMITMENT_REVIEW') {
     const items = (data.items as { id: string; from: string; to: string; reason: string }[] | undefined) ?? [];
     return (
-      <details className="text-xs">
-        <summary className="cursor-pointer text-muted-foreground">{items.length} commitment(s) reviewed — show details</summary>
-        <ul className="mt-1 flex flex-col gap-0.5">
-          {items.map((i) => (
-            <li key={i.id}>
-              <span className="num font-semibold">{i.id}</span> {i.from} → <span className="font-semibold">{i.to}</span> — <span className="text-muted-foreground">{i.reason}</span>
-            </li>
-          ))}
-        </ul>
-      </details>
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-panel-2 p-3 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="font-semibold text-foreground">Commitment review ({items.length} promises evaluated)</span>
+          <span className="text-muted-foreground">Memory across cycles</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {items.map((i) => {
+            const needsRenegotiate = i.to === 'VOID' || i.to === 'BREACHED' || i.reason.toLowerCase().includes('renegotiat');
+            return (
+              <div key={i.id} className={cn('flex flex-wrap items-center gap-2 rounded border px-2.5 py-1.5', needsRenegotiate ? 'border-amber/40 bg-amber/5' : 'border-border/60 bg-panel')}>
+                <span className="num font-semibold text-foreground">{i.id}</span>
+                <span className="text-muted-foreground">{i.from}</span>
+                <ArrowRight className="size-3 text-muted-foreground" />
+                <span className={cn('font-semibold', i.to === 'FULFILLED' ? 'text-success' : i.to === 'BREACHED' ? 'text-danger' : i.to === 'DUE' ? 'text-info' : 'text-amber')}>
+                  {i.to}
+                </span>
+                <span className="text-muted-foreground">— {i.reason}</span>
+                {needsRenegotiate && <span className="ml-auto rounded bg-amber/20 px-1.5 py-0.5 text-[10px] font-medium text-amber">Renegotiation needed</span>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     );
   }
   if (m.body && m.body !== m.summary) return <Text className="text-xs text-muted-foreground">{m.body}</Text>;

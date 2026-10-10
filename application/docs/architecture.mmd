@@ -1,0 +1,59 @@
+flowchart LR
+  subgraph UI["Next.js 16 Dashboard (React 19)"]
+    MC["Mission Control"]
+    CT["Council Transcript"]
+    MB["Mode Board"]
+    VAL["Validation"]
+    JC["Judge Controls"]
+    XV["History · Feasibility · Compliance · Agent Mind · Resilience Lab · Search"]
+  end
+  subgraph API["Route handlers (Node runtime)"]
+    ST["GET /api/state"]
+    SSE["GET /api/stream (SSE)"]
+    CTRL["POST /api/control/* (start, reset, resume, countersign, faults)"]
+    EVT["POST /api/events/interpret + apply"]
+    EXP["GET /api/export (JSON, CSV, evidence zip)"]
+    SRCH["GET /api/search (all sessions)"]
+    HLTH["GET /api/health (models, storage)"]
+  end
+  subgraph RT["AresRuntime singleton"]
+    ORCH["Negotiation orchestrator: 7-phase rounds, min/max rounds, deadlines, approval gate"]
+    STATE[("SessionState: scenarios, plans, votes, commitments, messages, agent states")]
+    BUS[("Event bus + ring buffer")]
+    GW["Agent gateway: timeout, repair retry, circuit breaker, fault injection"]
+    FB["Rule-based fallback policies (labeled FALLBACK)"]
+    subgraph AG["Five agents on OpenAI Agents SDK (separate instructions, sessions, state)"]
+      CMD["ACTUAL · Commander (+ Event Intake)"]
+      LS["HAVEN · Life Support"]
+      MED["MERIDIAN · Medical"]
+      FD["VERDANT · Food Production"]
+      ENG["FORGE · Engineering"]
+    end
+    subgraph DET["Deterministic engine (pure TypeScript)"]
+      V["Validator (10 checks)"]
+      OPT["Optimizer (81 combinations)"]
+      INF["Infeasibility certificate"]
+      LED["Commitment ledger + review"]
+      PV["Plan versioning + vote binding"]
+      CMP["Compliance checker"]
+    end
+  end
+  OAI[("OpenAI Responses API · gpt-5.6-terra · tracing")]
+  SYNC["Write-behind sync: dirty rows → FK-ordered idempotent upserts, retries, status"]
+  DB[("Supabase Postgres 17: ares_* tables · RLS on · service_role-only grants · full-text search")]
+  SNAP[("Local snapshot data/INSTANCE/current.json: crash buffer + file-mode store")]
+  JC --> CTRL --> ORCH
+  JC --> EVT --> CMD
+  ORCH --> GW --> AG --> OAI
+  GW --> FB
+  AG -- "read-only tools" --> DET
+  ORCH --> DET
+  ORCH --> STATE
+  STATE -- "markDirty" --> SYNC -- "supabase-js + secret key" --> DB
+  STATE -- "debounced" --> SNAP
+  STATE --> BUS --> SSE --> UI
+  ST --> UI
+  EXP --> STATE
+  EXP -- "archived sessions" --> DB
+  SRCH -- "rpc ares_search_messages" --> DB
+  HLTH --> SYNC

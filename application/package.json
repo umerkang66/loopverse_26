@@ -17,6 +17,8 @@
     "db:check": "node scripts/db.mjs check",
     "db:advisors": "node scripts/db.mjs advisors",
     "db:types": "node scripts/db.mjs types",
+    "bench:models": "tsx --env-file-if-exists=.env scripts/bench-models.ts",
+    "secret:scan": "node scripts/secret-scan.mjs",
     "check": "npm run typecheck && npm run lint && npm run test"
   },
   "dependencies": {
@@ -26,6 +28,7 @@
     "cn": "^0.4.0",
     "fflate": "^0.8.3",
     "lucide-react": "^1.54.0",
+    "mermaid": "^12.1.0",
     "motion": "^14.1.0",
     "next": "16.4.0",
     "next-themes": "^0.4.6",

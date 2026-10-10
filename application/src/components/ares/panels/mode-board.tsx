@@ -50,10 +50,28 @@ export function ModeBoard() {
           </div>
         )}
       </div>
-      <div className="grid grid-cols-1 gap-2">
-        {DEPARTMENT_IDS.map((d) => (
-          <DepartmentCard key={d} view={deptView(state, plan, sc, d, messages)} plan={plan} sc={sc} />
-        ))}
+      <div className="relative">
+        {(plan.status === 'INVALID' || plan.status === 'STALE') && (
+          <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center overflow-hidden rounded-lg bg-background/75 backdrop-blur-[1.5px] p-4 text-center">
+            <div
+              className={`rotate-[-16deg] rounded-lg border-4 px-8 py-3 text-3xl sm:text-4xl font-black uppercase tracking-widest shadow-2xl ${
+                plan.status === 'INVALID' ? 'border-danger text-danger bg-danger/15' : 'border-amber text-amber bg-amber/15'
+              }`}
+            >
+              {plan.status}
+            </div>
+            {plan.statusReason && (
+              <p className="mt-4 max-w-sm rounded border bg-panel px-3 py-1.5 text-xs font-semibold text-foreground shadow-md">
+                {plan.statusReason}
+              </p>
+            )}
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-2">
+          {DEPARTMENT_IDS.map((d) => (
+            <DepartmentCard key={d} view={deptView(state, plan, sc, d, messages)} plan={plan} sc={sc} />
+          ))}
+        </div>
       </div>
       <VotePanel state={state} plan={plan} cleared={cleared} />
     </div>

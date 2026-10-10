@@ -60,6 +60,8 @@ export function MissionControl() {
 
 function EventBanner({ state, sc, messages }: { state: PublicState; sc: Scenario | null; messages: CouncilMessage[] }) {
   const denied = useMemo(() => (sc ? messages.some((m) => m.scenarioId === sc.id && m.subtype === 'OVERRIDE_DENIED') : false), [messages, sc]);
+  const openDialog = useAres((s) => s.openDialog);
+  const setUi = useAres((s) => s.setUi);
   if (!sc || sc.kind === 'BASELINE') {
     return (
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-panel-2 px-3 py-2 text-sm">
@@ -74,6 +76,24 @@ function EventBanner({ state, sc, messages }: { state: PublicState; sc: Scenario
   }
   const record = state.events.find((e) => e.id === sc.eventId);
   const effects = record ? record.interpretation.effects.filter((e) => e.type !== 'INFO').map((e) => describeEffect(e, record.poolBefore)) : [];
+  const triggerHour = record?.interpretation.triggerHour ?? sc.colonyHour;
+  const duration = record?.interpretation.durationHours;
+
+  const endEarly = () => {
+    if (!record) return;
+    const deltas: Record<string, number> = {};
+    for (const e of record.interpretation.effects) {
+      if (e.type === 'RESOURCE_DELTA' && e.resource && typeof e.value === 'number') {
+        deltas[e.resource] = (deltas[e.resource] ?? 0) - e.value;
+      } else if (e.type === 'RESOURCE_PERCENT' && e.resource) {
+        const diff = record.poolBefore[e.resource] - record.poolAfter[e.resource];
+        deltas[e.resource] = (deltas[e.resource] ?? 0) + diff;
+      }
+    }
+    setUi({ injectPreset: { tab: 'manual', manualDeltas: deltas, title: `Resolution: ${sc.title} ended early` } });
+    openDialog('inject');
+  };
+
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber/40 bg-amber/5 px-3 py-2 text-sm">
       <Pill tone="amber" icon={<Zap className="size-3" />}>
@@ -81,7 +101,7 @@ function EventBanner({ state, sc, messages }: { state: PublicState; sc: Scenario
       </Pill>
       <span className="font-medium">{sc.title}</span>
       {effects.length > 0 && <span className="num text-amber">— {effects.join(' · ')}</span>}
-      {record?.interpretation.durationHours ? <span className="text-muted-foreground">· {record.interpretation.durationHours} h</span> : null}
+      {duration ? <span className="text-muted-foreground">· Temporary: until Hour {triggerHour + duration}</span> : null}
       <span className="meta-secondary text-muted-foreground">· colony hour {sc.colonyHour}</span>
       {sc.policy.crisisOverride ? (
         <Pill tone="amber" icon={<ShieldAlert className="size-3" />}>
@@ -91,6 +111,15 @@ function EventBanner({ state, sc, messages }: { state: PublicState; sc: Scenario
         <Pill tone="muted">Override denied — baseline plan exists</Pill>
       ) : null}
       {sc.forbiddenModes.length > 0 && <Pill tone="danger">Forbidden: {sc.forbiddenModes.join(', ')}</Pill>}
+      {duration && sc.status !== 'RESOLVED' && (
+        <button
+          type="button"
+          onClick={endEarly}
+          className="ml-auto inline-flex items-center gap-1 rounded bg-panel-2 px-2 py-0.5 text-xs font-medium text-amber border border-amber/40 hover:bg-amber/10"
+        >
+          End event early
+        </button>
+      )}
     </div>
   );
 }

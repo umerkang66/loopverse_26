@@ -9,6 +9,8 @@ import { evaluateAll } from '@/engine/optimizer';
 import { constraintsOf } from '@/engine/policy';
 import { capOf } from '@/engine/resources';
 import { Vec, ModeChips, Pill } from './bits';
+import { useAres } from '@/client/store';
+import { Button } from '@/components/ui/button';
 
 /** Minimum achievable demand per resource among combinations the policy allows (ignoring resources). */
 function floors(sc: Scenario, cert: InfeasibilityCertificate): { key: ResourceKey; min: number; cap: number }[] {
@@ -20,6 +22,9 @@ function floors(sc: Scenario, cert: InfeasibilityCertificate): { key: ResourceKe
 
 export function CertificateCard({ cert, sc, compact = false }: { cert: InfeasibilityCertificate; sc: Scenario | null; compact?: boolean }) {
   const bars = useMemo(() => (sc ? floors(sc, cert) : []), [sc, cert]);
+  const openDialog = useAres((s) => s.openDialog);
+  const setUi = useAres((s) => s.setUi);
+  const readOnly = useAres((s) => s.readOnly);
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-danger/40 bg-danger/5 p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -89,6 +94,24 @@ export function CertificateCard({ cert, sc, compact = false }: { cert: Infeasibi
               {p.feasible ? '✓' : '✗'} {p.change}: {p.detail}
             </p>
           ))}
+        {!compact && !readOnly && cert.closest[0] && (
+          <div className="pt-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                const closest = cert.closest[0];
+                if (!closest) return;
+                const deltas = Object.fromEntries(
+                  RESOURCE_KEYS.filter((k) => closest.shortfall[k] > 0).map((k) => [k, closest.shortfall[k]]),
+                );
+                setUi({ injectPreset: { tab: 'manual', manualDeltas: deltas, title: 'Emergency resupply' } });
+                openDialog('inject');
+              }}
+            >
+              Simulate resupply
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
