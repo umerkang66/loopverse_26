@@ -49,6 +49,7 @@ function SettingsBody() {
   const readOnly = useAres((s) => s.readOnly);
   const presentation = useAres((s) => s.ui.presentation);
   const setUi = useAres((s) => s.setUi);
+  const openDialog = useAres((s) => s.openDialog);
   const [code, setCode] = useState(() => getJudgeCode());
   if (!state) return null;
   const c = state.config;

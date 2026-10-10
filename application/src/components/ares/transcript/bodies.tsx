@@ -45,17 +45,20 @@ export function BriefingBody({ m }: { m: CouncilMessage }) {
       <Text>{m.body}</Text>
       {asks.length > 0 && (
         <ul className="mt-1 flex flex-col gap-0.5 text-[13px]">
-          {asks.map((a, i) => (
-            <li key={i} className="flex gap-1.5">
-              <ArrowRight className="mt-0.5 size-3.5 shrink-0 text-mars" aria-hidden />
-              <span>
-                <span className="font-semibold" style={{ color: a.to === 'ALL' ? undefined : ACTOR_META[a.to].color }}>
-                  {a.to === 'ALL' ? 'ALL' : ACTOR_META[a.to].callsign}
+          {asks.map((a, i) => {
+            const meta = a.to !== 'ALL' && a.to in ACTOR_META ? ACTOR_META[a.to] : null;
+            return (
+              <li key={i} className="flex gap-1.5">
+                <ArrowRight className="mt-0.5 size-3.5 shrink-0 text-mars" aria-hidden />
+                <span>
+                  <span className="font-semibold" style={{ color: meta?.color }}>
+                    {a.to === 'ALL' ? 'ALL' : (meta?.callsign ?? a.to)}
+                  </span>
+                  : {typeof a.ask === 'string' ? a.ask : JSON.stringify(a.ask)}
                 </span>
-                : {a.ask}
-              </span>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </>
@@ -92,7 +95,15 @@ export function ProposalBody({ m }: { m: CouncilMessage }) {
 }
 
 export function ObjectionBody({ m }: { m: CouncilMessage }) {
-  const data = d<{ kind?: string; target?: string; detail?: string; conditions?: string[]; conflicts?: string[]; responses?: string[] }>(m);
+  const data = d<{
+    kind?: string;
+    target?: string;
+    detail?: string;
+    conditions?: (string | unknown)[];
+    conflicts?: (string | unknown)[];
+    responses?: (string | { messageId?: string; response?: string; commitmentId?: string; decision?: string; reason?: string } | unknown)[];
+  }>(m);
+  const highlight = useAres((s) => s.highlight);
   const kind = data.kind ?? m.subtype ?? 'OBJECTION';
   return (
     <>
@@ -110,15 +121,35 @@ export function ObjectionBody({ m }: { m: CouncilMessage }) {
       {data.conflicts && data.conflicts.length > 0 && (
         <ul className="list-inside list-disc text-[13px] text-muted-foreground">
           {data.conflicts.map((c, i) => (
-            <li key={i}>{c}</li>
+            <li key={i}>{typeof c === 'string' ? c : JSON.stringify(c)}</li>
           ))}
         </ul>
       )}
       {data.responses && data.responses.length > 0 && (
         <ul className="list-inside list-disc text-[13px] text-muted-foreground">
-          {data.responses.map((c, i) => (
-            <li key={i}>{c}</li>
-          ))}
+          {data.responses.map((c, i) => {
+            if (typeof c === 'string') return <li key={i}>{c}</li>;
+            if (typeof c === 'object' && c !== null) {
+              const r = c as { messageId?: string; response?: string; commitmentId?: string; decision?: string; reason?: string };
+              const id = r.messageId ?? r.commitmentId;
+              const text = r.response ?? (r.decision ? `${r.decision}: ${r.reason ?? ''}` : r.reason) ?? JSON.stringify(c);
+              return (
+                <li key={i}>
+                  {id ? (
+                    <button
+                      type="button"
+                      className="num mr-1 font-semibold text-info underline-offset-2 hover:underline"
+                      onClick={() => highlight(id)}
+                    >
+                      {id}:
+                    </button>
+                  ) : null}
+                  <span>{text}</span>
+                </li>
+              );
+            }
+            return <li key={i}>{String(c)}</li>;
+          })}
         </ul>
       )}
     </>
@@ -251,7 +282,11 @@ export function PlanDraftBody({ m }: { m: CouncilMessage }) {
         {data.selections && <ModeChips selections={data.selections} />}
         {data.totals && <VecVs totals={data.totals} cap={cap} />}
         <span className="num text-xs text-muted-foreground">risk {data.risk}</span>
-        {data.sacrifices && data.sacrifices.length > 0 && <Pill tone="danger">Sacrifice: {data.sacrifices.map((s) => ACTOR_META[s as ActorId].callsign).join(', ')}</Pill>}
+        {data.sacrifices && data.sacrifices.length > 0 && (
+          <Pill tone="danger">
+            Sacrifice: {data.sacrifices.map((s) => ACTOR_META[s as ActorId]?.callsign ?? s).join(', ')}
+          </Pill>
+        )}
       </div>
       {data.commitmentIds && data.commitmentIds.length > 0 && <p className="num text-xs text-muted-foreground">Includes {data.commitmentIds.join(', ')}</p>}
       {data.diff && (
@@ -364,11 +399,14 @@ export function ApprovalBody({ m }: { m: CouncilMessage }) {
         <Pill tone="success">
           <span className="num">{data.votes?.filter((v) => v.decision === 'ACCEPT').length ?? 0}/4</span> ACCEPT
         </Pill>
-        {data.votes?.map((v) => (
-          <span key={v.id} className="font-semibold" style={{ color: ACTOR_META[v.agentId].color }}>
-            {ACTOR_META[v.agentId].callsign} ✓
-          </span>
-        ))}
+        {data.votes?.map((v) => {
+          const meta = ACTOR_META[v.agentId];
+          return (
+            <span key={v.id} className="font-semibold" style={{ color: meta?.color }}>
+              {meta?.callsign ?? v.agentId} ✓
+            </span>
+          );
+        })}
       </div>
       <Text>{m.body}</Text>
     </div>
@@ -388,7 +426,7 @@ export function DecisionBody({ m }: { m: CouncilMessage }) {
       {data.blockingReasons && data.blockingReasons.length > 0 && (
         <ul className="list-inside list-disc text-xs text-muted-foreground">
           {data.blockingReasons.map((r, i) => (
-            <li key={i}>{r}</li>
+            <li key={i}>{typeof r === 'string' ? r : JSON.stringify(r)}</li>
           ))}
         </ul>
       )}
@@ -454,24 +492,25 @@ export function EventBody({ m }: { m: CouncilMessage }) {
                 <div key={i} className="flex items-center gap-1.5 rounded border border-border/60 bg-panel-2 px-2 py-0.5 text-xs">
                   <span className={cn('rounded px-1 text-[10px] font-mono border', badgeTone)}>{e.origin ?? 'parser'}</span>
                   <span className="font-medium text-foreground">{e.type}</span>
-                  {e.resource && (
+                  {'resource' in e && (
                     <span className="num text-muted-foreground">
                       {e.resource} {e.value !== undefined && e.value !== null ? (e.value > 0 ? `+${e.value}` : String(e.value)) : ''}
                     </span>
                   )}
-                  {e.modeId && <span className="num text-amber">{e.modeId}</span>}
-                  {e.note && <span className="text-[11px] text-muted-foreground italic">({e.note.slice(0, 45)})</span>}
+                  {'modeId' in e && <span className="num text-amber">{e.modeId}</span>}
+                  {'note' in e && e.note && <span className="text-[11px] text-muted-foreground italic">({e.note.slice(0, 45)})</span>}
+                  {'reason' in e && e.reason && <span className="text-[11px] text-muted-foreground italic">({e.reason.slice(0, 45)})</span>}
                 </div>
               );
             })}
           </div>
         </div>
       )}
-      {ev?.raw !== undefined && ev?.raw !== null && (
+      {ev?.interpretation.raw !== undefined && ev?.interpretation.raw !== null && (
         <details className="text-xs">
           <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Raw crisis input</summary>
           <pre className="mt-1 max-h-40 overflow-auto rounded bg-panel-2 p-2 font-mono text-[11px] text-muted-foreground whitespace-pre-wrap">
-            {typeof ev.raw === 'string' ? ev.raw : JSON.stringify(ev.raw, null, 2)}
+            {typeof ev.interpretation.raw === 'string' ? ev.interpretation.raw : JSON.stringify(ev.interpretation.raw, null, 2)}
           </pre>
         </details>
       )}
